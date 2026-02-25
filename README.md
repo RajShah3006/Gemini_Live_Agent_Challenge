@@ -1,3 +1,3 @@
 # Gemini_Live_Agent_Challenge
 
-Purpose to create a virtual teacher that interactively helps solve/answer questions in real time.
+The purpose of this project is to develop an intelligent virtual teacher capable of interactively assisting users in solving problems and answering questions in real time using a digital whiteboard interface. This virtual teacher will leverage advanced AI to understand user queries, provide step-by-step explanations, and visually demonstrate solutions on the whiteboard. The goal is to create an engaging, responsive, and educational experience that mimics the guidance of a human instructor, making learning more accessible and interactive for users of all ages.
