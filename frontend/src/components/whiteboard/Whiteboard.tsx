@@ -9,7 +9,7 @@ const LINE_DURATION = 350;
 const SHAPE_DURATION = 450;
 const BG = "#060a10";
 const GRID = "rgba(80,140,255,0.04)";
-const FONT = "Caveat, 'Segoe Script', cursive";
+const FONT = "Kalam, 'Architects Daughter', 'Segoe Script', cursive";
 
 // Neon palette
 const NEON_TEXT = "#ffffff";

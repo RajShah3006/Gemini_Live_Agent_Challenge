@@ -11,143 +11,124 @@ from google.genai import types
 
 import config as cfg
 
-# Whiteboard tool declarations — Gemini calls these to draw on the canvas
-WHITEBOARD_TOOLS = [
-    {
-        "function_declarations": [
-            {
-                "name": "draw_text",
-                "description": "Draw plain text on the whiteboard at a specific position",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string", "description": "The text to display"},
-                        "x": {"type": "number", "description": "X coordinate (pixels from left)"},
-                        "y": {"type": "number", "description": "Y coordinate (pixels from top)"},
-                        "size": {"type": "number", "description": "Font size in pixels (default 18)"},
-                        "color": {"type": "string", "description": "CSS color (default #e2e8f0)"},
-                    },
-                    "required": ["text", "x", "y"],
-                },
-            },
-            {
-                "name": "draw_latex",
-                "description": "Draw a LaTeX math expression on the whiteboard",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "latex": {"type": "string", "description": "LaTeX math expression (e.g. 'x = \\\\frac{-b \\\\pm \\\\sqrt{b^2-4ac}}{2a}')"},
-                        "x": {"type": "number", "description": "X coordinate"},
-                        "y": {"type": "number", "description": "Y coordinate"},
-                        "size": {"type": "number", "description": "Font size (default 22)"},
-                        "color": {"type": "string", "description": "CSS color (default #a5f3fc)"},
-                    },
-                    "required": ["latex", "x", "y"],
-                },
-            },
-            {
-                "name": "draw_line",
-                "description": "Draw a straight line on the whiteboard",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x1": {"type": "number"}, "y1": {"type": "number"},
-                        "x2": {"type": "number"}, "y2": {"type": "number"},
-                        "color": {"type": "string"}, "width": {"type": "number"},
-                    },
-                    "required": ["x1", "y1", "x2", "y2"],
-                },
-            },
-            {
-                "name": "draw_arrow",
-                "description": "Draw an arrow on the whiteboard",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x1": {"type": "number"}, "y1": {"type": "number"},
-                        "x2": {"type": "number"}, "y2": {"type": "number"},
-                        "color": {"type": "string"}, "width": {"type": "number"},
-                    },
-                    "required": ["x1", "y1", "x2", "y2"],
-                },
-            },
-            {
-                "name": "draw_circle",
-                "description": "Draw a circle on the whiteboard",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "cx": {"type": "number"}, "cy": {"type": "number"},
-                        "r": {"type": "number"},
-                        "color": {"type": "string"}, "width": {"type": "number"},
-                    },
-                    "required": ["cx", "cy", "r"],
-                },
-            },
-            {
-                "name": "draw_rect",
-                "description": "Draw a rectangle on the whiteboard",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "number"}, "y": {"type": "number"},
-                        "w": {"type": "number"}, "h": {"type": "number"},
-                        "color": {"type": "string"}, "width": {"type": "number"},
-                    },
-                    "required": ["x", "y", "w", "h"],
-                },
-            },
-            {
-                "name": "highlight",
-                "description": "Highlight a rectangular area on the whiteboard (semi-transparent)",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "number"}, "y": {"type": "number"},
-                        "w": {"type": "number"}, "h": {"type": "number"},
-                        "color": {"type": "string"},
-                    },
-                    "required": ["x", "y", "w", "h"],
-                },
-            },
-            {
-                "name": "step_marker",
-                "description": "Place a step number marker on the whiteboard to label solution steps",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "step": {"type": "number", "description": "Step number"},
-                        "x": {"type": "number"}, "y": {"type": "number"},
-                    },
-                    "required": ["step", "x", "y"],
-                },
-            },
-            {
-                "name": "clear_whiteboard",
-                "description": "Clear the entire whiteboard to start fresh",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        ]
-    }
+# ── Tool declarations using SDK types ──
+
+def _schema(props: dict, required: list[str] | None = None) -> types.Schema:
+    return types.Schema(
+        type="OBJECT",
+        properties={k: types.Schema(**v) for k, v in props.items()},
+        required=required or [],
+    )
+
+WHITEBOARD_DECLS = [
+    types.FunctionDeclaration(
+        name="draw_text",
+        description="Draw plain text on the whiteboard. ALWAYS call this tool — never just speak text without drawing it.",
+        parameters=_schema({
+            "text": {"type": "STRING", "description": "Text to display"},
+            "x": {"type": "NUMBER", "description": "X coordinate (px from left, keep 40-700)"},
+            "y": {"type": "NUMBER", "description": "Y coordinate (px from top)"},
+            "size": {"type": "NUMBER", "description": "Font size in px (default 24)"},
+            "color": {"type": "STRING", "description": "CSS color (default white)"},
+        }, ["text", "x", "y"]),
+    ),
+    types.FunctionDeclaration(
+        name="draw_latex",
+        description="Draw a math expression on the whiteboard. Use for ALL math: equations, fractions, variables, numbers. MUST call this for every math expression.",
+        parameters=_schema({
+            "latex": {"type": "STRING", "description": "Math expression, e.g. 'x = (-b ± √(b²-4ac)) / 2a'"},
+            "x": {"type": "NUMBER", "description": "X coordinate"},
+            "y": {"type": "NUMBER", "description": "Y coordinate"},
+            "size": {"type": "NUMBER", "description": "Font size (default 28)"},
+            "color": {"type": "STRING", "description": "CSS color (default cyan)"},
+        }, ["latex", "x", "y"]),
+    ),
+    types.FunctionDeclaration(
+        name="draw_line",
+        description="Draw a straight line on the whiteboard",
+        parameters=_schema({
+            "x1": {"type": "NUMBER"}, "y1": {"type": "NUMBER"},
+            "x2": {"type": "NUMBER"}, "y2": {"type": "NUMBER"},
+            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
+        }, ["x1", "y1", "x2", "y2"]),
+    ),
+    types.FunctionDeclaration(
+        name="draw_arrow",
+        description="Draw an arrow on the whiteboard",
+        parameters=_schema({
+            "x1": {"type": "NUMBER"}, "y1": {"type": "NUMBER"},
+            "x2": {"type": "NUMBER"}, "y2": {"type": "NUMBER"},
+            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
+        }, ["x1", "y1", "x2", "y2"]),
+    ),
+    types.FunctionDeclaration(
+        name="draw_circle",
+        description="Draw a circle on the whiteboard",
+        parameters=_schema({
+            "cx": {"type": "NUMBER"}, "cy": {"type": "NUMBER"},
+            "r": {"type": "NUMBER"},
+            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
+        }, ["cx", "cy", "r"]),
+    ),
+    types.FunctionDeclaration(
+        name="draw_rect",
+        description="Draw a rectangle on the whiteboard",
+        parameters=_schema({
+            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
+            "w": {"type": "NUMBER"}, "h": {"type": "NUMBER"},
+            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
+        }, ["x", "y", "w", "h"]),
+    ),
+    types.FunctionDeclaration(
+        name="highlight",
+        description="Highlight a rectangular area (semi-transparent overlay)",
+        parameters=_schema({
+            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
+            "w": {"type": "NUMBER"}, "h": {"type": "NUMBER"},
+            "color": {"type": "STRING"},
+        }, ["x", "y", "w", "h"]),
+    ),
+    types.FunctionDeclaration(
+        name="step_marker",
+        description="Place a step number label on the whiteboard",
+        parameters=_schema({
+            "step": {"type": "NUMBER", "description": "Step number"},
+            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
+        }, ["step", "x", "y"]),
+    ),
+    types.FunctionDeclaration(
+        name="clear_whiteboard",
+        description="Clear the entire whiteboard before starting a new problem",
+        parameters=_schema({}),
+    ),
 ]
 
-SYSTEM_INSTRUCTION = """You are MathBoard, a patient and encouraging AI math tutor. You help students with algebra, geometry, and calculus.
+WHITEBOARD_TOOLS = [types.Tool(function_declarations=WHITEBOARD_DECLS)]
 
-IMPORTANT RULES:
-1. When explaining solutions, ALWAYS use the whiteboard tools to draw your work step by step.
-2. Start each problem by clearing the whiteboard with clear_whiteboard.
-3. Use step_marker to label each step (Step 1, Step 2, etc).
-4. Use draw_latex for all mathematical expressions — never just describe them verbally.
-5. Use draw_text for labels, explanations, and annotations.
-6. Use draw_line, draw_arrow, draw_circle for diagrams and geometry.
-7. Use highlight to draw attention to important parts.
-8. Space your work vertically — start at y=60 and add ~60px between steps.
-9. Keep x positions between 40 and 700 for readability.
-10. Speak naturally while drawing — explain what you're writing as you write it.
-11. If a student interrupts, stop immediately, listen, and adjust your approach.
-12. If a student uploads an image, analyze it and identify the math problem.
-13. Use the Socratic method when appropriate — ask guiding questions instead of just giving answers.
-14. Be encouraging and patient. Celebrate when the student understands."""
+SYSTEM_INSTRUCTION = """You are MathBoard, a patient and encouraging AI math tutor with a digital whiteboard.
+
+YOU MUST ALWAYS CALL THE WHITEBOARD TOOL FUNCTIONS to draw on the board. Never just speak math without drawing it.
+
+For EVERY math problem:
+1. Call clear_whiteboard first.
+2. Call step_marker(step=1, x=40, y=50) for each step.
+3. Call draw_latex to write every equation and expression. This is mandatory.
+4. Call draw_text for labels and short explanations.
+5. Call draw_line / draw_arrow / draw_circle for diagrams.
+6. Space vertically: start y=60, increment by ~70px per step. Keep x between 40-700.
+7. Speak naturally while calling tools — explain what you are writing.
+
+Example for "solve 2x + 3 = 7":
+- call clear_whiteboard()
+- call step_marker(step=1, x=40, y=50)
+- call draw_latex(latex="2x + 3 = 7", x=60, y=80)
+- call draw_text(text="Subtract 3 from both sides", x=60, y=130)
+- call step_marker(step=2, x=40, y=170)
+- call draw_latex(latex="2x = 4", x=60, y=200)
+- call step_marker(step=3, x=40, y=250)
+- call draw_latex(latex="x = 2", x=60, y=280, size=32)
+
+NEVER describe math verbally without also calling draw_latex or draw_text. The student's whiteboard is blank unless you call the tools."""
 
 MODEL = "gemini-2.5-flash-native-audio-latest"
 
@@ -170,11 +151,13 @@ class GeminiSession:
 
     async def connect(self):
         """Open a Gemini Live session."""
-        live_config = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": SYSTEM_INSTRUCTION,
-            "tools": WHITEBOARD_TOOLS,
-        }
+        live_config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(
+                parts=[types.Part(text=SYSTEM_INSTRUCTION)]
+            ),
+            tools=WHITEBOARD_TOOLS,
+        )
         self._ctx = self._client.aio.live.connect(
             model=MODEL, config=live_config
         )
@@ -193,6 +176,24 @@ class GeminiSession:
 
     async def _handle_response(self, response):
         """Process a single response from Gemini."""
+        # Debug: log every response
+        attrs = []
+        if response.data is not None:
+            attrs.append("data(audio)")
+        if response.tool_call:
+            attrs.append(f"tool_call({len(response.tool_call.function_calls)})")
+        if response.server_content:
+            sc = response.server_content
+            if hasattr(sc, 'model_turn') and sc.model_turn:
+                parts = [type(p).__name__ for p in (sc.model_turn.parts or [])]
+                attrs.append(f"model_turn({parts})")
+            if hasattr(sc, 'interrupted') and sc.interrupted:
+                attrs.append("interrupted")
+            if hasattr(sc, 'turn_complete') and sc.turn_complete:
+                attrs.append("turn_complete")
+        if attrs:
+            print(f"[RESP] {', '.join(attrs)}")
+
         # Handle audio output
         if response.data is not None:
             await self.on_audio(response.data)
@@ -200,11 +201,12 @@ class GeminiSession:
 
         # Handle tool calls (whiteboard commands)
         if response.tool_call:
+            print(f"[TOOL CALL] {len(response.tool_call.function_calls)} function(s)")
             function_responses = []
             for fc in response.tool_call.function_calls:
-                # Convert function call to whiteboard command
                 action = fc.name
                 params = dict(fc.args) if fc.args else {}
+                print(f"  → {action}({params})")
 
                 if action == "clear_whiteboard":
                     action = "clear"
