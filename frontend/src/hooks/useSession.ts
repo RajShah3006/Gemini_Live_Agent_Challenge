@@ -19,12 +19,13 @@ export function useSession() {
     WhiteboardCommand[]
   >([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const micActiveRef = useRef(false);
 
   const { playChunk, stop: stopAudio } = useAudioPlayer();
 
   const sendAudioChunk = useCallback(
     (base64: string) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (micActiveRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({ type: "audio", payload: { data: base64 } }),
         );
@@ -68,9 +69,12 @@ export function useSession() {
               setIsSpeaking(msg.payload.speaking as boolean);
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
+            // Flush audio queue on interruption
+            if (msg.payload.interrupted) {
+              stopAudio();
+            }
             break;
           case "audio":
-            // Play audio from Gemini
             if (msg.payload.data) {
               playChunk(msg.payload.data as string);
             }
@@ -83,7 +87,7 @@ export function useSession() {
         console.error("Failed to parse server message");
       }
     },
-    [addTranscript, playChunk],
+    [addTranscript, playChunk, stopAudio],
   );
 
   const connect = useCallback(() => {
@@ -92,9 +96,7 @@ export function useSession() {
     const ws = new WebSocket(WS_URL);
     ws.onopen = () => {
       setIsConnected(true);
-      // Start microphone capture once connected
       startMic();
-      setIsListening(true);
     };
     ws.onclose = () => {
       setIsConnected(false);
@@ -114,6 +116,42 @@ export function useSession() {
     wsRef.current?.close();
     wsRef.current = null;
   }, [stopMic, stopAudio]);
+
+  // Push-to-talk: hold Space to talk
+  const startTalking = useCallback(() => {
+    micActiveRef.current = true;
+    setIsListening(true);
+    // Flush tutor audio so student can interrupt
+    stopAudio();
+  }, [stopAudio]);
+
+  const stopTalking = useCallback(() => {
+    micActiveRef.current = false;
+    setIsListening(false);
+  }, []);
+
+  // Spacebar push-to-talk
+  useEffect(() => {
+    if (!isConnected) return;
+    const down = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        startTalking();
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        stopTalking();
+      }
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, [isConnected, startTalking, stopTalking]);
 
   const send = useCallback(
     (type: string, payload: Record<string, unknown>) => {
@@ -140,7 +178,6 @@ export function useSession() {
     [send, addTranscript],
   );
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopMic();
@@ -150,12 +187,14 @@ export function useSession() {
 
   return {
     isConnected,
-    isListening: isListening || isRecording,
+    isListening,
     isSpeaking,
     connect,
     disconnect,
     sendImage,
     sendText,
+    startTalking,
+    stopTalking,
     whiteboardCommands,
     transcript,
   };

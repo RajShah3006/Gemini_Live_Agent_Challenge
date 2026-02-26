@@ -170,9 +170,15 @@ class GeminiSession:
             while self._session:
                 turn = self._session.receive()
                 async for response in turn:
-                    await self._handle_response(response)
+                    try:
+                        await self._handle_response(response)
+                    except Exception as e:
+                        print(f"[ERROR] handling response: {e}")
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             print(f"Receive loop error: {e}")
+            await self.on_status({"error": str(e), "connected": False})
 
     async def _handle_response(self, response):
         """Process a single response from Gemini."""
@@ -236,10 +242,10 @@ class GeminiSession:
         # Handle turn completion
         if response.server_content:
             if hasattr(response.server_content, 'interrupted') and response.server_content.interrupted:
-                await self.on_status({"speaking": False})
+                await self.on_status({"speaking": False, "interrupted": True})
 
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
-                await self.on_status({"speaking": False})
+                await self.on_status({"speaking": False, "turn_complete": True})
 
             # Extract text transcript if present
             if response.server_content.model_turn:

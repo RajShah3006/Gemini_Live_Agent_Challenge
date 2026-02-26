@@ -15,6 +15,8 @@ export default function Home() {
     disconnect,
     sendImage,
     sendText,
+    startTalking,
+    stopTalking,
     whiteboardCommands,
     transcript,
   } = useSession();
@@ -114,6 +116,8 @@ export default function Home() {
               onDisconnect={disconnect}
               onToggleUpload={() => setShowUpload((v) => !v)}
               onSendText={sendText}
+              onStartTalking={startTalking}
+              onStopTalking={stopTalking}
             />
           </div>
         </div>
