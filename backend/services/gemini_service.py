@@ -149,7 +149,7 @@ IMPORTANT RULES:
 13. Use the Socratic method when appropriate — ask guiding questions instead of just giving answers.
 14. Be encouraging and patient. Celebrate when the student understands."""
 
-MODEL = "gemini-2.5-flash-preview-native-audio-dialog"
+MODEL = "gemini-2.5-flash-native-audio-latest"
 
 
 class GeminiSession:
@@ -164,6 +164,7 @@ class GeminiSession:
         self.on_transcript = on_transcript
         self.on_status = on_status
         self._session = None
+        self._ctx = None
         self._client = genai.Client(api_key=cfg.GOOGLE_API_KEY)
         self._receive_task: asyncio.Task | None = None
 
@@ -174,9 +175,10 @@ class GeminiSession:
             "system_instruction": SYSTEM_INSTRUCTION,
             "tools": WHITEBOARD_TOOLS,
         }
-        self._session = await self._client.aio.live.connect(
+        self._ctx = self._client.aio.live.connect(
             model=MODEL, config=live_config
         )
+        self._session = await self._ctx.__aenter__()
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def _receive_loop(self):
@@ -282,7 +284,8 @@ class GeminiSession:
         """Close the Gemini session."""
         if self._receive_task:
             self._receive_task.cancel()
-        if self._session:
-            self._session.close()
+        if self._session and self._ctx:
+            await self._ctx.__aexit__(None, None, None)
             self._session = None
+            self._ctx = None
 
