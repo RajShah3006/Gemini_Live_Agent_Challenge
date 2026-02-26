@@ -7,6 +7,8 @@ import type {
   TranscriptEntry,
   ServerMessage,
 } from "@/lib/types";
+import { useMicrophone } from "./useMicrophone";
+import { useAudioPlayer } from "./useAudioPlayer";
 
 export function useSession() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -17,6 +19,22 @@ export function useSession() {
     WhiteboardCommand[]
   >([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+
+  const { playChunk, stop: stopAudio } = useAudioPlayer();
+
+  const sendAudioChunk = useCallback(
+    (base64: string) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: "audio", payload: { data: base64 } }),
+        );
+      }
+    },
+    [],
+  );
+
+  const { isRecording, start: startMic, stop: stopMic } =
+    useMicrophone(sendAudioChunk);
 
   const addTranscript = useCallback(
     (role: "user" | "tutor", text: string) => {
@@ -52,7 +70,10 @@ export function useSession() {
               setIsListening(msg.payload.listening as boolean);
             break;
           case "audio":
-            // Audio playback will be handled in Phase 2
+            // Play audio from Gemini
+            if (msg.payload.data) {
+              playChunk(msg.payload.data as string);
+            }
             break;
           case "error":
             console.error("Server error:", msg.payload);
@@ -62,28 +83,37 @@ export function useSession() {
         console.error("Failed to parse server message");
       }
     },
-    [addTranscript],
+    [addTranscript, playChunk],
   );
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const ws = new WebSocket(WS_URL);
-    ws.onopen = () => setIsConnected(true);
+    ws.onopen = () => {
+      setIsConnected(true);
+      // Start microphone capture once connected
+      startMic();
+      setIsListening(true);
+    };
     ws.onclose = () => {
       setIsConnected(false);
       setIsListening(false);
       setIsSpeaking(false);
+      stopMic();
+      stopAudio();
     };
     ws.onmessage = handleMessage;
     ws.onerror = () => ws.close();
     wsRef.current = ws;
-  }, [handleMessage]);
+  }, [handleMessage, startMic, stopMic, stopAudio]);
 
   const disconnect = useCallback(() => {
+    stopMic();
+    stopAudio();
     wsRef.current?.close();
     wsRef.current = null;
-  }, []);
+  }, [stopMic, stopAudio]);
 
   const send = useCallback(
     (type: string, payload: Record<string, unknown>) => {
@@ -113,13 +143,14 @@ export function useSession() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      stopMic();
       wsRef.current?.close();
     };
-  }, []);
+  }, [stopMic]);
 
   return {
     isConnected,
-    isListening,
+    isListening: isListening || isRecording,
     isSpeaking,
     connect,
     disconnect,
