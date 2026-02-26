@@ -3,13 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { WhiteboardCommand } from "@/lib/types";
 
-/* ── Config ─────────────────────────────────── */
-const CHAR_DELAY = 40;
+/* ── Lightboard Config ──────────────────────── */
+const CHAR_DELAY = 38;
 const LINE_DURATION = 350;
 const SHAPE_DURATION = 450;
-const BG_COLOR = "#101c15";
-const GRID_COLOR = "rgba(255,255,255,0.025)";
+const BG = "#060a10";
+const GRID = "rgba(80,140,255,0.04)";
 const FONT = "Caveat, 'Segoe Script', cursive";
+
+// Neon palette
+const NEON_TEXT = "#ffffff";
+const NEON_TEXT_GLOW = "#88ccff";
+const NEON_MATH = "#00e5ff";
+const NEON_MATH_GLOW = "#0090cc";
+const NEON_STEP = "#00ffaa";
+const NEON_STEP_GLOW = "#009966";
+const NEON_LINE = "#ffffff";
+const NEON_LINE_GLOW = "#5599ff";
 
 interface WhiteboardProps {
   commands: WhiteboardCommand[];
@@ -17,13 +27,13 @@ interface WhiteboardProps {
 
 export function Whiteboard({ commands }: WhiteboardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dprRef = useRef(1);
   const queueRef = useRef<WhiteboardCommand[]>([]);
   const completedRef = useRef<WhiteboardCommand[]>([]);
   const processedRef = useRef(0);
   const busyRef = useRef(false);
   const [cursor, setCursor] = useState({ x: 0, y: 0, show: false });
 
-  // Queue new commands & kick off animation
   useEffect(() => {
     const fresh = commands.slice(processedRef.current);
     if (fresh.length > 0) {
@@ -45,32 +55,37 @@ export function Whiteboard({ commands }: WhiteboardProps) {
       const cmd = queueRef.current.shift()!;
       if (cmd.action === "clear") {
         completedRef.current = [];
-        clearBoard(ctx, canvas);
+        clearBoard(ctx, canvas, dprRef.current);
         setCursor(c => ({ ...c, show: false }));
         continue;
       }
-      await animateCmd(ctx, cmd, setCursor);
+      await animateCmd(ctx, cmd, dprRef.current, setCursor);
       completedRef.current.push(cmd);
     }
     setCursor(c => ({ ...c, show: false }));
     busyRef.current = false;
-    // catch any items added while finishing
     if (queueRef.current.length > 0) drain();
   }
 
-  // Resize — instant redraw
+  // Resize with Retina DPI scaling
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const resize = () => {
-      const p = canvas.parentElement;
-      if (!p) return;
-      canvas.width = p.clientWidth;
-      canvas.height = p.clientHeight;
+      const parent = canvas.parentElement;
+      if (!parent) return;
+      const dpr = window.devicePixelRatio || 1;
+      dprRef.current = dpr;
+      const w = parent.clientWidth, h = parent.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      clearBoard(ctx, canvas);
-      completedRef.current.forEach(c => drawInstant(ctx, c, canvas));
+      ctx.scale(dpr, dpr);
+      clearBoard(ctx, canvas, dpr);
+      completedRef.current.forEach(c => drawInstant(ctx, c, canvas, dpr));
     };
     resize();
     window.addEventListener("resize", resize);
@@ -78,19 +93,18 @@ export function Whiteboard({ commands }: WhiteboardProps) {
   }, []);
 
   return (
-    <div className="relative flex-1" style={{ background: BG_COLOR }}>
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-      {/* Chalk cursor glow */}
+    <div className="relative flex-1" style={{ background: BG }}>
+      <canvas ref={canvasRef} className="absolute inset-0" />
+      {/* Light-pen cursor */}
       <div
-        className="pointer-events-none absolute rounded-full transition-all duration-75 ease-out"
+        className="pointer-events-none absolute rounded-full transition-all duration-[60ms] ease-out"
         style={{
-          left: cursor.x - 5,
-          top: cursor.y - 5,
-          width: 10,
-          height: 10,
-          background: "rgba(255,255,255,0.9)",
-          boxShadow:
-            "0 0 14px 5px rgba(255,255,255,0.5), 0 0 30px 10px rgba(165,243,252,0.2)",
+          left: cursor.x - 6,
+          top: cursor.y - 6,
+          width: 12,
+          height: 12,
+          background: "radial-gradient(circle, #fff 0%, rgba(0,229,255,0.6) 50%, transparent 100%)",
+          boxShadow: "0 0 18px 6px rgba(0,229,255,0.5), 0 0 40px 12px rgba(0,229,255,0.15)",
           opacity: cursor.show ? 1 : 0,
         }}
       />
@@ -98,9 +112,7 @@ export function Whiteboard({ commands }: WhiteboardProps) {
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
             <div className="mb-3 text-5xl">📐</div>
-            <p className="text-lg font-medium text-gray-500">
-              Whiteboard ready
-            </p>
+            <p className="text-lg font-medium text-gray-500">Whiteboard ready</p>
             <p className="mt-1 text-sm text-gray-600">
               Upload a math problem or ask a question to get started
             </p>
@@ -111,43 +123,74 @@ export function Whiteboard({ commands }: WhiteboardProps) {
   );
 }
 
-/* ── Animated command renderer ────────────────── */
+/* ═══ Helpers: neon glow drawing ═══ */
+
+function glowText(
+  ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
+  color: string, glow: string, size: number, dpr: number, bold = false,
+) {
+  const prefix = bold ? "bold " : "";
+  ctx.font = `${prefix}${size}px ${FONT}`;
+  // Outer glow
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 16 * dpr;
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+  // Inner glow (brighter center)
+  ctx.shadowBlur = 6 * dpr;
+  ctx.shadowColor = color;
+  ctx.fillText(text, x, y);
+  // Crisp pass
+  ctx.shadowBlur = 0;
+  ctx.fillText(text, x, y);
+}
+
+function glowStroke(
+  ctx: CanvasRenderingContext2D, color: string, glow: string,
+  width: number, dpr: number,
+) {
+  // Outer glow
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 14 * dpr;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+  // Crisp center
+  ctx.shadowBlur = 4 * dpr;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.stroke();
+}
 
 type SetCursor = React.Dispatch<
   React.SetStateAction<{ x: number; y: number; show: boolean }>
 >;
 
+/* ═══ Animated command renderer ═══ */
+
 function animateCmd(
-  ctx: CanvasRenderingContext2D,
-  cmd: WhiteboardCommand,
-  setCursor: SetCursor,
+  ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
+  dpr: number, setCursor: SetCursor,
 ): Promise<void> {
   const p = cmd.params;
   return new Promise(resolve => {
     switch (cmd.action) {
       case "draw_text":
       case "draw_latex": {
-        const text = (cmd.action === "draw_latex" ? p.latex : p.text) as string;
-        const x = p.x as number,
-          y = p.y as number;
-        const size = (p.size as number) || (cmd.action === "draw_latex" ? 26 : 22);
-        const color =
-          (p.color as string) ||
-          (cmd.action === "draw_latex" ? "#a5f3fc" : "#f0ede6");
+        const isLatex = cmd.action === "draw_latex";
+        const text = (isLatex ? p.latex : p.text) as string;
+        const x = p.x as number, y = p.y as number;
+        const size = (p.size as number) || (isLatex ? 28 : 24);
+        const color = (p.color as string) || (isLatex ? NEON_MATH : NEON_TEXT);
+        const glow = isLatex ? NEON_MATH_GLOW : NEON_TEXT_GLOW;
         ctx.font = `${size}px ${FONT}`;
-        ctx.fillStyle = color;
         let i = 0;
         const tick = () => {
-          if (i >= text.length) { resolve(); return; }
+          if (i >= text.length) { ctx.shadowBlur = 0; resolve(); return; }
           const xOff = ctx.measureText(text.slice(0, i)).width;
-          ctx.globalAlpha = 0.85 + Math.random() * 0.15;
-          ctx.fillText(text[i], x + xOff, y + (Math.random() - 0.5) * 0.8);
-          ctx.globalAlpha = 1;
-          setCursor({
-            x: x + xOff + ctx.measureText(text[i]).width,
-            y: y - size * 0.5,
-            show: true,
-          });
+          glowText(ctx, text[i], x + xOff, y, color, glow, size, dpr);
+          const charW = ctx.measureText(text[i]).width;
+          setCursor({ x: x + xOff + charW, y: y - size * 0.4, show: true });
           i++;
           setTimeout(tick, CHAR_DELAY);
         };
@@ -155,26 +198,27 @@ function animateCmd(
         break;
       }
 
-      case "draw_line":
-        chalkLine(ctx, p.x1 as number, p.y1 as number, p.x2 as number, p.y2 as number,
-          (p.color as string) || "#f0ede6", (p.width as number) || 2,
-          LINE_DURATION, setCursor, resolve);
+      case "draw_line": {
+        const color = (p.color as string) || NEON_LINE;
+        neonLine(ctx, p.x1 as number, p.y1 as number, p.x2 as number, p.y2 as number,
+          color, NEON_LINE_GLOW, (p.width as number) || 2, LINE_DURATION, dpr, setCursor, resolve);
         break;
+      }
 
       case "draw_arrow": {
         const x1 = p.x1 as number, y1 = p.y1 as number,
           x2 = p.x2 as number, y2 = p.y2 as number;
-        const color = (p.color as string) || "#f0ede6",
-          w = (p.width as number) || 2;
-        chalkLine(ctx, x1, y1, x2, y2, color, w, LINE_DURATION, setCursor, () => {
+        const color = (p.color as string) || NEON_LINE, w = (p.width as number) || 2;
+        neonLine(ctx, x1, y1, x2, y2, color, NEON_LINE_GLOW, w, LINE_DURATION, dpr, setCursor, () => {
           const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
-          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round";
+          ctx.lineCap = "round";
           ctx.beginPath(); ctx.moveTo(x2, y2);
           ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6));
-          ctx.stroke();
+          glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
           ctx.beginPath(); ctx.moveTo(x2, y2);
           ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6));
-          ctx.stroke();
+          glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
+          ctx.shadowBlur = 0;
           resolve();
         });
         break;
@@ -182,20 +226,18 @@ function animateCmd(
 
       case "draw_circle": {
         const cx = p.cx as number, cy = p.cy as number, r = p.r as number;
-        const color = (p.color as string) || "#f0ede6", w = (p.width as number) || 2;
+        const color = (p.color as string) || NEON_LINE, w = (p.width as number) || 2;
         const t0 = performance.now();
         let prev = 0;
         const step = () => {
           const prog = Math.min((performance.now() - t0) / SHAPE_DURATION, 1);
           const ang = prog * Math.PI * 2;
-          ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round";
-          ctx.beginPath(); ctx.arc(cx, cy, r, prev, ang); ctx.stroke();
-          ctx.globalAlpha = 0.18; ctx.lineWidth = w + 1.5;
-          ctx.beginPath(); ctx.arc(cx, cy, r + (Math.random() - 0.5), prev, ang); ctx.stroke();
-          ctx.globalAlpha = 1; ctx.lineWidth = w;
+          ctx.lineCap = "round";
+          ctx.beginPath(); ctx.arc(cx, cy, r, prev, ang);
+          glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
           prev = ang;
           setCursor({ x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang), show: true });
-          prog < 1 ? requestAnimationFrame(step) : resolve();
+          prog < 1 ? requestAnimationFrame(step) : (ctx.shadowBlur = 0, resolve());
         };
         requestAnimationFrame(step);
         break;
@@ -204,7 +246,7 @@ function animateCmd(
       case "draw_rect": {
         const rx = p.x as number, ry = p.y as number,
           rw = p.w as number, rh = p.h as number;
-        const color = (p.color as string) || "#f0ede6", w = (p.width as number) || 2;
+        const color = (p.color as string) || NEON_LINE, w = (p.width as number) || 2;
         const sides: [number, number, number, number][] = [
           [rx, ry, rx + rw, ry], [rx + rw, ry, rx + rw, ry + rh],
           [rx + rw, ry + rh, rx, ry + rh], [rx, ry + rh, rx, ry],
@@ -213,49 +255,50 @@ function animateCmd(
         const next = () => {
           if (si >= sides.length) { resolve(); return; }
           const [a, b, c, d] = sides[si++];
-          chalkLine(ctx, a, b, c, d, color, w, SHAPE_DURATION / 4, setCursor, next);
+          neonLine(ctx, a, b, c, d, color, NEON_LINE_GLOW, w, SHAPE_DURATION / 4, dpr, setCursor, next);
         };
         next();
         break;
       }
 
       case "highlight":
-        ctx.fillStyle = (p.color as string) || "rgba(250,204,21,0.15)";
+        ctx.shadowColor = (p.color as string) || "rgba(0,229,255,0.3)";
+        ctx.shadowBlur = 20 * dpr;
+        ctx.fillStyle = (p.color as string) || "rgba(0,229,255,0.06)";
         ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
+        ctx.shadowBlur = 0;
         resolve();
         break;
 
       case "step_marker": {
         const sx = p.x as number, sy = p.y as number;
         const label = `Step ${p.step as number}`;
-        ctx.font = `bold 18px ${FONT}`;
-        ctx.fillStyle = "#10b981";
+        ctx.font = `bold 20px ${FONT}`;
         let i = 0;
         const tick = () => {
-          if (i >= label.length) { resolve(); return; }
+          if (i >= label.length) { ctx.shadowBlur = 0; resolve(); return; }
           const xOff = ctx.measureText(label.slice(0, i)).width;
-          ctx.fillText(label[i], sx + xOff, sy);
+          glowText(ctx, label[i], sx + xOff, sy, NEON_STEP, NEON_STEP_GLOW, 20, dpr, true);
           setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true });
           i++;
-          setTimeout(tick, 30);
+          setTimeout(tick, 28);
         };
         tick();
         break;
       }
 
-      default:
-        resolve();
+      default: resolve();
     }
   });
 }
 
-/* ── Animated line with chalk texture ──────── */
+/* ═══ Animated neon line ═══ */
 
-function chalkLine(
+function neonLine(
   ctx: CanvasRenderingContext2D,
   x1: number, y1: number, x2: number, y2: number,
-  color: string, width: number, dur: number,
-  setCursor: SetCursor, onDone: () => void,
+  color: string, glow: string, width: number, dur: number,
+  dpr: number, setCursor: SetCursor, onDone: () => void,
 ) {
   const t0 = performance.now();
   let lx = x1, ly = y1;
@@ -263,100 +306,105 @@ function chalkLine(
     const prog = Math.min((performance.now() - t0) / dur, 1);
     const ease = 1 - Math.pow(1 - prog, 3);
     const cx = x1 + (x2 - x1) * ease, cy = y1 + (y2 - y1) * ease;
-    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(lx + (Math.random() - 0.5) * 0.5, ly + (Math.random() - 0.5) * 0.5);
-    ctx.lineTo(cx + (Math.random() - 0.5) * 0.5, cy + (Math.random() - 0.5) * 0.5);
-    ctx.stroke();
-    // chalk dust texture
-    ctx.globalAlpha = 0.18; ctx.lineWidth = width + 1.5;
-    ctx.beginPath();
-    ctx.moveTo(lx + (Math.random() - 0.5) * 1.5, ly + (Math.random() - 0.5) * 1.5);
-    ctx.lineTo(cx + (Math.random() - 0.5) * 1.5, cy + (Math.random() - 0.5) * 1.5);
-    ctx.stroke();
-    ctx.globalAlpha = 1; ctx.lineWidth = width;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(cx, cy);
+    glowStroke(ctx, color, glow, width, dpr);
     lx = cx; ly = cy;
     setCursor({ x: cx, y: cy, show: true });
-    prog < 1 ? requestAnimationFrame(step) : onDone();
+    prog < 1 ? requestAnimationFrame(step) : (ctx.shadowBlur = 0, onDone());
   };
   requestAnimationFrame(step);
 }
 
-/* ── Instant draw (resize / completed redraw) ── */
+/* ═══ Instant draw (resize / replay) ═══ */
 
 function drawInstant(
-  ctx: CanvasRenderingContext2D,
-  cmd: WhiteboardCommand,
-  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
+  canvas: HTMLCanvasElement, dpr: number,
 ) {
   const p = cmd.params;
   switch (cmd.action) {
     case "clear":
-      clearBoard(ctx, canvas);
+      clearBoard(ctx, canvas, dpr);
       break;
     case "draw_text":
-      ctx.fillStyle = (p.color as string) || "#f0ede6";
-      ctx.font = `${(p.size as number) || 22}px ${FONT}`;
-      ctx.fillText(p.text as string, p.x as number, p.y as number);
+      glowText(ctx, p.text as string, p.x as number, p.y as number,
+        (p.color as string) || NEON_TEXT, NEON_TEXT_GLOW,
+        (p.size as number) || 24, dpr);
+      ctx.shadowBlur = 0;
       break;
     case "draw_latex":
-      ctx.fillStyle = (p.color as string) || "#a5f3fc";
-      ctx.font = `${(p.size as number) || 26}px ${FONT}`;
-      ctx.fillText(p.latex as string, p.x as number, p.y as number);
+      glowText(ctx, p.latex as string, p.x as number, p.y as number,
+        (p.color as string) || NEON_MATH, NEON_MATH_GLOW,
+        (p.size as number) || 28, dpr);
+      ctx.shadowBlur = 0;
       break;
     case "draw_line":
-      ctx.strokeStyle = (p.color as string) || "#f0ede6";
-      ctx.lineWidth = (p.width as number) || 2; ctx.lineCap = "round";
+      ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(p.x1 as number, p.y1 as number);
-      ctx.lineTo(p.x2 as number, p.y2 as number); ctx.stroke();
+      ctx.lineTo(p.x2 as number, p.y2 as number);
+      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      ctx.shadowBlur = 0;
       break;
     case "draw_arrow": {
       const x1 = p.x1 as number, y1 = p.y1 as number,
         x2 = p.x2 as number, y2 = p.y2 as number;
-      ctx.strokeStyle = (p.color as string) || "#f0ede6";
-      ctx.lineWidth = (p.width as number) || 2; ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      const color = (p.color as string) || NEON_LINE, w = (p.width as number) || 2;
+      ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
       const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
       ctx.beginPath(); ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6)); ctx.stroke();
+      ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6));
+      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
       ctx.beginPath(); ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6)); ctx.stroke();
+      ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6));
+      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
+      ctx.shadowBlur = 0;
       break;
     }
     case "draw_circle":
-      ctx.strokeStyle = (p.color as string) || "#f0ede6";
-      ctx.lineWidth = (p.width as number) || 2;
-      ctx.beginPath(); ctx.arc(p.cx as number, p.cy as number, p.r as number, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.cx as number, p.cy as number, p.r as number, 0, 2 * Math.PI);
+      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      ctx.shadowBlur = 0;
       break;
     case "draw_rect":
-      ctx.strokeStyle = (p.color as string) || "#f0ede6";
-      ctx.lineWidth = (p.width as number) || 2;
-      ctx.strokeRect(p.x as number, p.y as number, p.w as number, p.h as number);
+      ctx.beginPath();
+      ctx.rect(p.x as number, p.y as number, p.w as number, p.h as number);
+      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      ctx.shadowBlur = 0;
       break;
     case "highlight":
-      ctx.fillStyle = (p.color as string) || "rgba(250,204,21,0.15)";
+      ctx.shadowColor = "rgba(0,229,255,0.3)";
+      ctx.shadowBlur = 20 * dpr;
+      ctx.fillStyle = (p.color as string) || "rgba(0,229,255,0.06)";
       ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
+      ctx.shadowBlur = 0;
       break;
     case "step_marker":
-      ctx.fillStyle = "#10b981";
-      ctx.font = `bold 18px ${FONT}`;
-      ctx.fillText(`Step ${p.step as number}`, p.x as number, p.y as number);
+      glowText(ctx, `Step ${p.step as number}`, p.x as number, p.y as number,
+        NEON_STEP, NEON_STEP_GLOW, 20, dpr, true);
+      ctx.shadowBlur = 0;
       break;
   }
 }
 
-/* ── Background ────────────────────────────── */
+/* ═══ Background ═══ */
 
-function clearBoard(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
-  ctx.fillStyle = BG_COLOR;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = GRID_COLOR;
+function clearBoard(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, dpr: number) {
+  const w = canvas.width / dpr, h = canvas.height / dpr;
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, w, h);
+  // Subtle grid
+  ctx.strokeStyle = GRID;
   ctx.lineWidth = 1;
   const s = 40;
-  for (let x = s; x < canvas.width; x += s) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  for (let x = s; x < w; x += s) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
   }
-  for (let y = s; y < canvas.height; y += s) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  for (let y = s; y < h; y += s) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
 }
