@@ -26,13 +26,55 @@ interface WhiteboardProps {
 }
 
 export function Whiteboard({ commands }: WhiteboardProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dprRef = useRef(1);
   const queueRef = useRef<WhiteboardCommand[]>([]);
   const completedRef = useRef<WhiteboardCommand[]>([]);
   const processedRef = useRef(0);
   const busyRef = useRef(false);
+  const maxYRef = useRef(0);
+  const viewWidthRef = useRef(800);
   const [cursor, setCursor] = useState({ x: 0, y: 0, show: false });
+
+  // Track the max y coordinate to grow the canvas
+  function trackY(y: number) {
+    if (y + 80 > maxYRef.current) {
+      maxYRef.current = y + 80;
+      resizeCanvas();
+    }
+  }
+
+  function resizeCanvas() {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+    const dpr = window.devicePixelRatio || 1;
+    dprRef.current = dpr;
+    const w = container.clientWidth;
+    viewWidthRef.current = w;
+    const minH = container.clientHeight;
+    const h = Math.max(minH, maxYRef.current);
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    clearBoard(ctx, w, h);
+    completedRef.current.forEach(c => drawInstant(ctx, c, dpr));
+  }
+
+  function autoScroll(y: number) {
+    const container = containerRef.current;
+    if (!container) return;
+    const viewH = container.clientHeight;
+    const targetScroll = y - viewH + 120;
+    if (targetScroll > container.scrollTop) {
+      container.scrollTo({ top: targetScroll, behavior: "smooth" });
+    }
+  }
 
   useEffect(() => {
     const fresh = commands.slice(processedRef.current);
@@ -55,9 +97,17 @@ export function Whiteboard({ commands }: WhiteboardProps) {
       const cmd = queueRef.current.shift()!;
       if (cmd.action === "clear") {
         completedRef.current = [];
-        clearBoard(ctx, canvas, dprRef.current);
+        maxYRef.current = 0;
+        resizeCanvas();
+        if (containerRef.current) containerRef.current.scrollTop = 0;
         setCursor(c => ({ ...c, show: false }));
         continue;
+      }
+      // Grow canvas and scroll to where we're about to draw
+      const cmdY = getCommandY(cmd);
+      if (cmdY > 0) {
+        trackY(cmdY);
+        autoScroll(cmdY);
       }
       await animateCmd(ctx, cmd, dprRef.current, setCursor);
       completedRef.current.push(cmd);
@@ -67,37 +117,27 @@ export function Whiteboard({ commands }: WhiteboardProps) {
     if (queueRef.current.length > 0) drain();
   }
 
-  // Resize with Retina DPI scaling
+  // Initial size + resize handler
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const resize = () => {
-      const parent = canvas.parentElement;
-      if (!parent) return;
-      const dpr = window.devicePixelRatio || 1;
-      dprRef.current = dpr;
-      const w = parent.clientWidth, h = parent.clientHeight;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = w + "px";
-      canvas.style.height = h + "px";
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.scale(dpr, dpr);
-      clearBoard(ctx, canvas, dpr);
-      completedRef.current.forEach(c => drawInstant(ctx, c, canvas, dpr));
-    };
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    resizeCanvas();
+    const onResize = () => resizeCanvas();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <div className="relative flex-1" style={{ background: BG }}>
-      <canvas ref={canvasRef} className="absolute inset-0" />
+    <div className="relative flex-1 overflow-hidden" style={{ background: BG }}>
+      <div
+        ref={containerRef}
+        className="absolute inset-0 overflow-y-auto overflow-x-hidden"
+        style={{ scrollbarWidth: "thin", scrollbarColor: "#1e293b #060a10" }}
+      >
+        <canvas ref={canvasRef} className="block" />
+      </div>
       {/* Light-pen cursor */}
       <div
-        className="pointer-events-none absolute rounded-full transition-all duration-[60ms] ease-out"
+        className="pointer-events-none fixed rounded-full transition-all duration-[60ms] ease-out"
         style={{
           left: cursor.x - 6,
           top: cursor.y - 6,
@@ -121,6 +161,16 @@ export function Whiteboard({ commands }: WhiteboardProps) {
       )}
     </div>
   );
+}
+
+/* ═══ Helpers ═══ */
+
+function getCommandY(cmd: WhiteboardCommand): number {
+  const p = cmd.params;
+  if (p.y !== undefined) return p.y as number;
+  if (p.y1 !== undefined) return Math.max(p.y1 as number, p.y2 as number);
+  if (p.cy !== undefined) return (p.cy as number) + (p.r as number || 0);
+  return 0;
 }
 
 /* ═══ Helpers: neon glow drawing ═══ */
@@ -320,12 +370,11 @@ function neonLine(
 
 function drawInstant(
   ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
-  canvas: HTMLCanvasElement, dpr: number,
+  dpr: number,
 ) {
   const p = cmd.params;
   switch (cmd.action) {
     case "clear":
-      clearBoard(ctx, canvas, dpr);
       break;
     case "draw_text":
       glowText(ctx, p.text as string, p.x as number, p.y as number,
@@ -392,12 +441,10 @@ function drawInstant(
 
 /* ═══ Background ═══ */
 
-function clearBoard(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, dpr: number) {
-  const w = canvas.width / dpr, h = canvas.height / dpr;
+function clearBoard(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = BG;
   ctx.fillRect(0, 0, w, h);
-  // Subtle grid
   ctx.strokeStyle = GRID;
   ctx.lineWidth = 1;
   const s = 40;
