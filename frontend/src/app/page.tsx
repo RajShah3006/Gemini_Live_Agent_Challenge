@@ -26,7 +26,9 @@ export default function Home() {
   return (
     <main className="flex h-screen flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-gray-800 px-6 py-3">
+      <header className="flex items-center justify-between border-b border-cyan-900/20 px-6 py-3"
+        style={{ background: "rgba(6,10,16,0.8)", backdropFilter: "blur(8px)" }}
+      >
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-lg font-bold">
             M
@@ -46,8 +48,9 @@ export default function Home() {
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                isConnected ? "bg-emerald-400" : "bg-gray-500"
+                isConnected ? "bg-emerald-400 shadow-sm shadow-emerald-400/50" : "bg-gray-500"
               }`}
+              style={isConnected ? { animation: "pulseGlow 2s ease-in-out infinite" } : undefined}
             />
             {isConnected ? "Connected" : "Disconnected"}
           </span>
@@ -58,11 +61,18 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden">
         {/* Whiteboard area */}
         <div className="flex flex-1 flex-col">
-          <Whiteboard commands={whiteboardCommands} />
+          <Whiteboard commands={whiteboardCommands} isSpeaking={isSpeaking} isThinking={!isSpeaking && !isListening && isConnected && whiteboardCommands.length > 0} />
         </div>
 
-        {/* Right panel */}
-        <div className="flex w-80 flex-col border-l border-gray-800 bg-gray-900/50">
+        {/* Right panel — glassmorphism */}
+        <div className="flex w-80 flex-col border-l border-cyan-900/30"
+          style={{
+            background: "rgba(6,10,16,0.65)",
+            backdropFilter: "blur(16px) saturate(1.4)",
+            WebkitBackdropFilter: "blur(16px) saturate(1.4)",
+            boxShadow: "inset 1px 0 0 rgba(0,229,255,0.06), -4px 0 24px rgba(0,0,0,0.3)",
+          }}
+        >
           {/* Transcript */}
           <div className="flex-1 overflow-y-auto p-4">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -77,11 +87,12 @@ export default function Home() {
                 {transcript.map((msg, i) => (
                   <div
                     key={i}
-                    className={`rounded-lg px-3 py-2 text-sm ${
+                    className={`rounded-lg px-3 py-2 text-sm backdrop-blur-sm ${
                       msg.role === "user"
-                        ? "ml-4 bg-blue-900/40 text-blue-200"
-                        : "mr-4 bg-gray-800 text-gray-200"
+                        ? "ml-4 bg-blue-500/10 text-blue-200 border border-blue-500/10"
+                        : "mr-4 bg-white/5 text-gray-200 border border-white/5"
                     }`}
+                    style={{ animation: "slideInRight 0.3s ease-out" }}
                   >
                     <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                       {msg.role === "user" ? "You" : "Tutor"}

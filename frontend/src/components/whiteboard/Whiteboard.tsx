@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { WhiteboardCommand } from "@/lib/types";
+import { WritingHand } from "./WritingHand";
+import { TeacherMascot, type MascotState } from "./TeacherMascot";
+import { WhiteboardToolbar } from "./WhiteboardToolbar";
 
 /* ── Lightboard Config ──────────────────────── */
 const CHAR_DELAY = 38;
@@ -23,9 +26,11 @@ const NEON_LINE_GLOW = "#5599ff";
 
 interface WhiteboardProps {
   commands: WhiteboardCommand[];
+  isSpeaking?: boolean;
+  isThinking?: boolean;
 }
 
-export function Whiteboard({ commands }: WhiteboardProps) {
+export function Whiteboard({ commands, isSpeaking = false, isThinking = false }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dprRef = useRef(1);
@@ -35,7 +40,11 @@ export function Whiteboard({ commands }: WhiteboardProps) {
   const busyRef = useRef(false);
   const maxYRef = useRef(0);
   const viewWidthRef = useRef(800);
-  const [cursor, setCursor] = useState({ x: 0, y: 0, show: false });
+  const [cursor, setCursor] = useState({ x: 0, y: 0, show: false, color: "#00e5ff" });
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  // Derive mascot state
+  const mascotState: MascotState = isDrawing ? "writing" : isSpeaking ? "talking" : isThinking ? "thinking" : "idle";
 
   // Track the max y coordinate to grow the canvas
   function trackY(y: number) {
@@ -101,8 +110,10 @@ export function Whiteboard({ commands }: WhiteboardProps) {
         resizeCanvas();
         if (containerRef.current) containerRef.current.scrollTop = 0;
         setCursor(c => ({ ...c, show: false }));
+        setIsDrawing(false);
         continue;
       }
+      setIsDrawing(true);
       // Grow canvas and scroll to where we're about to draw
       const cmdY = getCommandY(cmd);
       if (cmdY > 0) {
@@ -113,6 +124,7 @@ export function Whiteboard({ commands }: WhiteboardProps) {
       completedRef.current.push(cmd);
     }
     setCursor(c => ({ ...c, show: false }));
+    setIsDrawing(false);
     busyRef.current = false;
     if (queueRef.current.length > 0) drain();
   }
@@ -128,35 +140,80 @@ export function Whiteboard({ commands }: WhiteboardProps) {
 
   return (
     <div className="relative flex-1 overflow-hidden" style={{ background: BG }}>
+      {/* Whiteboard toolbar */}
+      <WhiteboardToolbar canvasRef={canvasRef} containerRef={containerRef} />
+      {/* Writing hand cursor (inside scrollable container) */}
       <div
         ref={containerRef}
         className="absolute inset-0 overflow-y-auto overflow-x-hidden"
         style={{ scrollbarWidth: "thin", scrollbarColor: "#1e293b #060a10" }}
       >
         <canvas ref={canvasRef} className="block" />
+        <WritingHand x={cursor.x} y={cursor.y} show={cursor.show} glowColor={cursor.color} />
       </div>
-      {/* Light-pen cursor */}
-      <div
-        className="pointer-events-none fixed rounded-full transition-all duration-[60ms] ease-out"
-        style={{
-          left: cursor.x - 6,
-          top: cursor.y - 6,
-          width: 12,
-          height: 12,
-          background: "radial-gradient(circle, #fff 0%, rgba(0,229,255,0.6) 50%, transparent 100%)",
-          boxShadow: "0 0 18px 6px rgba(0,229,255,0.5), 0 0 40px 12px rgba(0,229,255,0.15)",
-          opacity: cursor.show ? 1 : 0,
-        }}
-      />
       {commands.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center">
-            <div className="mb-3 text-5xl">📐</div>
-            <p className="text-lg font-medium text-gray-500">Whiteboard ready</p>
-            <p className="mt-1 text-sm text-gray-600">
-              Upload a math problem or ask a question to get started
+          <div className="text-center relative">
+            {/* Floating math symbols background */}
+            <div className="absolute inset-0 -m-20 pointer-events-none overflow-hidden opacity-[0.06]" aria-hidden>
+              <span className="absolute text-4xl top-2 left-4" style={{ animation: "mascotFloat 4s ease-in-out infinite" }}>∫</span>
+              <span className="absolute text-3xl top-8 right-6" style={{ animation: "mascotFloat 5s ease-in-out 0.5s infinite" }}>π</span>
+              <span className="absolute text-5xl bottom-4 left-8" style={{ animation: "mascotFloat 3.5s ease-in-out 1s infinite" }}>√</span>
+              <span className="absolute text-3xl bottom-8 right-2" style={{ animation: "mascotFloat 4.5s ease-in-out 0.3s infinite" }}>∑</span>
+              <span className="absolute text-4xl top-1/2 left-0" style={{ animation: "mascotFloat 3.8s ease-in-out 0.7s infinite" }}>Δ</span>
+              <span className="absolute text-3xl top-1/3 right-0" style={{ animation: "mascotFloat 4.2s ease-in-out 1.2s infinite" }}>∞</span>
+            </div>
+            {/* Owl mascot (waving version) */}
+            <svg width="80" height="90" viewBox="0 0 80 90" fill="none" xmlns="http://www.w3.org/2000/svg"
+              className="mx-auto mb-4" style={{ filter: "drop-shadow(0 0 16px rgba(0,229,255,0.4))", animation: "mascotFloat 3s ease-in-out infinite" }}>
+              <ellipse cx="40" cy="58" rx="26" ry="28" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1.5" />
+              <ellipse cx="40" cy="64" rx="16" ry="18" fill="#0f1d35" opacity="0.6" />
+              <ellipse cx="14" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1"
+                style={{ transformOrigin: "24px 50px", animation: "wingWave 1.2s ease-in-out infinite" }} />
+              <ellipse cx="66" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1" />
+              <circle cx="40" cy="28" r="22" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1.5" />
+              <path d="M22 12 L26 22 L18 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
+              <path d="M58 12 L54 22 L62 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
+              <circle cx="32" cy="26" r="9" fill="#0a1628" />
+              <circle cx="48" cy="26" r="9" fill="#0a1628" />
+              <circle cx="32" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+                <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="48" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+                <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="33" cy="25" r="2" fill="#060a10" />
+              <circle cx="49" cy="25" r="2" fill="#060a10" />
+              <circle cx="34" cy="24" r="1" fill="#ffffff" opacity="0.8" />
+              <circle cx="50" cy="24" r="1" fill="#ffffff" opacity="0.8" />
+              <rect x="22" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
+              <rect x="42" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
+              <line x1="38" y1="24" x2="42" y2="24" stroke="#64748b" strokeWidth="1" />
+              <path d="M36 33 L40 36 L44 33" fill="#fbbf24" stroke="#d97706" strokeWidth="0.8" />
+              <polygon points="22,10 40,2 58,10 40,18" fill="#334155" stroke="#475569" strokeWidth="1" />
+              <rect x="38" y="2" width="4" height="2" rx="1" fill="#475569" />
+              <ellipse cx="32" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
+              <ellipse cx="48" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
+            </svg>
+            <h2 className="text-xl font-semibold text-cyan-300/80 mb-1" style={{ textShadow: "0 0 20px rgba(0,229,255,0.3)" }}>
+              Hi! I&apos;m MathBoard 🦉
+            </h2>
+            <p className="text-sm text-gray-400 max-w-[280px] mx-auto">
+              Upload a photo of your homework or hold <kbd className="rounded border border-gray-700 px-1.5 py-0.5 text-[11px] text-cyan-400">Space</kbd> to ask me anything
             </p>
           </div>
+        </div>
+      )}
+      {/* Teacher mascot */}
+      <TeacherMascot state={mascotState} />
+      {/* Thinking indicator */}
+      {isThinking && !isDrawing && commands.length > 0 && (
+        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-4 py-2"
+          style={{ background: "rgba(6,10,16,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(0,229,255,0.15)" }}>
+          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+          <span className="ml-1 text-[10px] text-cyan-400/70">thinking...</span>
         </div>
       )}
     </div>
@@ -213,7 +270,7 @@ function glowStroke(
 }
 
 type SetCursor = React.Dispatch<
-  React.SetStateAction<{ x: number; y: number; show: boolean }>
+  React.SetStateAction<{ x: number; y: number; show: boolean; color: string }>
 >;
 
 /* ═══ Animated command renderer ═══ */
@@ -240,7 +297,7 @@ function animateCmd(
           const xOff = ctx.measureText(text.slice(0, i)).width;
           glowText(ctx, text[i], x + xOff, y, color, glow, size, dpr);
           const charW = ctx.measureText(text[i]).width;
-          setCursor({ x: x + xOff + charW, y: y - size * 0.4, show: true });
+          setCursor({ x: x + xOff + charW, y: y - size * 0.4, show: true, color: glow });
           i++;
           setTimeout(tick, CHAR_DELAY);
         };
@@ -286,7 +343,7 @@ function animateCmd(
           ctx.beginPath(); ctx.arc(cx, cy, r, prev, ang);
           glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
           prev = ang;
-          setCursor({ x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang), show: true });
+          setCursor({ x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang), show: true, color: NEON_LINE_GLOW });
           prog < 1 ? requestAnimationFrame(step) : (ctx.shadowBlur = 0, resolve());
         };
         requestAnimationFrame(step);
@@ -329,7 +386,7 @@ function animateCmd(
           if (i >= label.length) { ctx.shadowBlur = 0; resolve(); return; }
           const xOff = ctx.measureText(label.slice(0, i)).width;
           glowText(ctx, label[i], sx + xOff, sy, NEON_STEP, NEON_STEP_GLOW, 20, dpr, true);
-          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true });
+          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: NEON_STEP_GLOW });
           i++;
           setTimeout(tick, 28);
         };
@@ -360,7 +417,7 @@ function neonLine(
     ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(cx, cy);
     glowStroke(ctx, color, glow, width, dpr);
     lx = cx; ly = cy;
-    setCursor({ x: cx, y: cy, show: true });
+    setCursor({ x: cx, y: cy, show: true, color: glow });
     prog < 1 ? requestAnimationFrame(step) : (ctx.shadowBlur = 0, onDone());
   };
   requestAnimationFrame(step);
