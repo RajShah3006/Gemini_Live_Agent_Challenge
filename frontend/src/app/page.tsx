@@ -93,11 +93,11 @@ export default function Home() {
           {/* Panel header */}
           <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
             <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-              Conversation
+              Your Questions
             </h3>
             {transcript.length > 0 && (
               <span className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
-                {transcript.length} messages
+                {transcript.length}
               </span>
             )}
           </div>
@@ -107,7 +107,7 @@ export default function Home() {
             {transcript.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <p className="text-center text-xs px-4" style={{ color: "var(--text-muted)" }}>
-                  Start a session to begin talking with your AI tutor.
+                  Your questions will appear here. Hold <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid var(--border)" }}>Space</kbd> to ask.
                 </p>
               </div>
             ) : (

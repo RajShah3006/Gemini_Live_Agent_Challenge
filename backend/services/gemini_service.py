@@ -248,11 +248,11 @@ class GeminiSession:
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                 await self.on_status({"speaking": False, "turn_complete": True})
 
-            # Extract text transcript if present
+            # Extract text transcript if present (log only, don't send to frontend)
             if response.server_content.model_turn:
                 for part in response.server_content.model_turn.parts:
                     if hasattr(part, 'text') and part.text:
-                        await self.on_transcript("tutor", part.text)
+                        print(f"[TRANSCRIPT] tutor: {part.text[:80]}...")
 
     async def send_audio(self, audio_data: bytes):
         """Send audio chunk from user's microphone."""
