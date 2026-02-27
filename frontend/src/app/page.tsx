@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Whiteboard } from "@/components/whiteboard/Whiteboard";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { ImageUpload } from "@/components/upload/ImageUpload";
@@ -22,116 +22,157 @@ export default function Home() {
   } = useSession();
 
   const [showUpload, setShowUpload] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [transcript]);
 
   return (
-    <main className="flex h-screen flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-cyan-900/20 px-6 py-3"
-        style={{ background: "rgba(6,10,16,0.8)", backdropFilter: "blur(8px)" }}
+    <main className="flex h-screen flex-col" style={{ background: "var(--bg-base)" }}>
+      {/* ── Header ── */}
+      <header
+        className="relative z-10 flex items-center justify-between px-5 py-2.5"
+        style={{
+          background: "var(--bg-surface)",
+          borderBottom: "1px solid var(--border)",
+        }}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-lg font-bold">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
+            style={{ background: "var(--accent)" }}>
             M
           </div>
           <div>
-            <h1 className="text-lg font-semibold leading-tight">MathBoard</h1>
-            <p className="text-xs text-gray-400">AI Math Tutor</p>
+            <h1 className="text-sm font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>MathBoard</h1>
+            <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>AI Math Tutor</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        <div className="flex items-center gap-2">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-              isConnected
-                ? "bg-emerald-900/50 text-emerald-400"
-                : "bg-gray-800 text-gray-400"
-            }`}
+            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium"
+            style={{
+              background: isConnected ? "rgba(52,211,153,0.1)" : "rgba(100,116,139,0.1)",
+              color: isConnected ? "var(--success)" : "var(--text-muted)",
+              border: `1px solid ${isConnected ? "rgba(52,211,153,0.2)" : "rgba(100,116,139,0.15)"}`,
+            }}
           >
             <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                isConnected ? "bg-emerald-400 shadow-sm shadow-emerald-400/50" : "bg-gray-500"
-              }`}
-              style={isConnected ? { animation: "pulseGlow 2s ease-in-out infinite" } : undefined}
+              className="h-1.5 w-1.5 rounded-full"
+              style={{
+                background: isConnected ? "var(--success)" : "var(--text-muted)",
+                boxShadow: isConnected ? "0 0 6px rgba(52,211,153,0.5)" : "none",
+              }}
             />
-            {isConnected ? "Connected" : "Disconnected"}
+            {isConnected ? "Live" : "Offline"}
           </span>
         </div>
       </header>
 
-      {/* Main content */}
+      {/* ── Main Area ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Whiteboard area */}
+        {/* Whiteboard */}
         <div className="flex flex-1 flex-col">
-          <Whiteboard commands={whiteboardCommands} isSpeaking={isSpeaking} isThinking={!isSpeaking && !isListening && isConnected && whiteboardCommands.length > 0} />
+          <Whiteboard
+            commands={whiteboardCommands}
+            isSpeaking={isSpeaking}
+            isThinking={!isSpeaking && !isListening && isConnected && whiteboardCommands.length > 0}
+          />
         </div>
 
-        {/* Right panel — glassmorphism */}
-        <div className="flex w-80 flex-col border-l border-cyan-900/30"
+        {/* ── Right Panel: Transcript ── */}
+        <div
+          className="flex w-[300px] flex-col"
           style={{
-            background: "rgba(6,10,16,0.65)",
-            backdropFilter: "blur(16px) saturate(1.4)",
-            WebkitBackdropFilter: "blur(16px) saturate(1.4)",
-            boxShadow: "inset 1px 0 0 rgba(0,229,255,0.06), -4px 0 24px rgba(0,0,0,0.3)",
+            background: "var(--bg-surface)",
+            borderLeft: "1px solid var(--border)",
           }}
         >
-          {/* Transcript */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+            <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
               Conversation
             </h3>
-            {transcript.length === 0 ? (
-              <p className="text-sm text-gray-500">
-                Start a session to begin talking with your AI tutor.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {transcript.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={`rounded-lg px-3 py-2 text-sm backdrop-blur-sm ${
-                      msg.role === "user"
-                        ? "ml-4 bg-blue-500/10 text-blue-200 border border-blue-500/10"
-                        : "mr-4 bg-white/5 text-gray-200 border border-white/5"
-                    }`}
-                    style={{ animation: "slideInRight 0.3s ease-out" }}
-                  >
-                    <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                      {msg.role === "user" ? "You" : "Tutor"}
-                    </span>
-                    {msg.text}
-                  </div>
-                ))}
-              </div>
+            {transcript.length > 0 && (
+              <span className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                {transcript.length} messages
+              </span>
             )}
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
+            {transcript.length === 0 ? (
+              <div className="flex h-full items-center justify-center">
+                <p className="text-center text-xs px-4" style={{ color: "var(--text-muted)" }}>
+                  Start a session to begin talking with your AI tutor.
+                </p>
+              </div>
+            ) : (
+              transcript.map((msg, i) => (
+                <div
+                  key={i}
+                  className={`rounded-lg px-3 py-2 text-[13px] leading-relaxed ${
+                    msg.role === "user" ? "ml-6" : "mr-3"
+                  }`}
+                  style={{
+                    background: msg.role === "user" ? "rgba(99,102,241,0.08)" : "var(--bg-elevated)",
+                    border: `1px solid ${msg.role === "user" ? "rgba(99,102,241,0.12)" : "var(--border)"}`,
+                    color: "var(--text-primary)",
+                    animation: "slideUp 0.25s ease-out",
+                  }}
+                >
+                  <span
+                    className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider"
+                    style={{ color: msg.role === "user" ? "var(--accent-light)" : "var(--text-muted)" }}
+                  >
+                    {msg.role === "user" ? "You" : "Tutor"}
+                  </span>
+                  {msg.text}
+                </div>
+              ))
+            )}
+            <div ref={chatEndRef} />
           </div>
 
           {/* Upload area */}
           {showUpload && (
-            <div className="border-t border-gray-800 p-4">
-              <ImageUpload
-                onUpload={(base64) => {
-                  sendImage(base64);
-                  setShowUpload(false);
-                }}
-                onCancel={() => setShowUpload(false)}
-              />
+            <div className="px-3 pb-3" style={{ borderTop: "1px solid var(--border)" }}>
+              <div className="pt-3">
+                <ImageUpload
+                  onUpload={(base64) => {
+                    sendImage(base64);
+                    setShowUpload(false);
+                  }}
+                  onCancel={() => setShowUpload(false)}
+                />
+              </div>
             </div>
           )}
-
-          {/* Controls */}
-          <div className="border-t border-gray-800 p-4">
-            <VoicePanel
-              isConnected={isConnected}
-              isListening={isListening}
-              isSpeaking={isSpeaking}
-              onConnect={connect}
-              onDisconnect={disconnect}
-              onToggleUpload={() => setShowUpload((v) => !v)}
-              onSendText={sendText}
-              onStartTalking={startTalking}
-              onStopTalking={stopTalking}
-            />
-          </div>
         </div>
+      </div>
+
+      {/* ── Bottom Control Bar ── */}
+      <div
+        className="relative z-10 flex items-center gap-3 px-5 py-3"
+        style={{
+          background: "var(--bg-surface)",
+          borderTop: "1px solid var(--border)",
+        }}
+      >
+        <VoicePanel
+          isConnected={isConnected}
+          isListening={isListening}
+          isSpeaking={isSpeaking}
+          onConnect={connect}
+          onDisconnect={disconnect}
+          onToggleUpload={() => setShowUpload((v) => !v)}
+          onSendText={sendText}
+          onStartTalking={startTalking}
+          onStopTalking={stopTalking}
+        />
       </div>
     </main>
   );

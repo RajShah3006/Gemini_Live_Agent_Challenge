@@ -60,17 +60,17 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
-          className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-            isDragging
-              ? "border-emerald-500 bg-emerald-900/20"
-              : "border-gray-700 hover:border-gray-600"
-          }`}
+          className="cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors"
+          style={{
+            borderColor: isDragging ? "var(--accent)" : "var(--border)",
+            background: isDragging ? "var(--accent-glow)" : "transparent",
+          }}
         >
           <div className="mb-2 text-2xl">📸</div>
-          <p className="text-sm text-gray-400">
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
             Drop an image, paste from clipboard, or click to browse
           </p>
-          <p className="mt-1 text-xs text-gray-600">
+          <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
             JPG, PNG, HEIC supported
           </p>
           <input
@@ -94,7 +94,8 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
           <div className="flex gap-2">
             <button
               onClick={() => onUpload(preview)}
-              className="flex-1 rounded-lg bg-emerald-600 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+              className="flex-1 rounded-lg py-2 text-sm font-medium text-white"
+              style={{ background: "var(--accent)" }}
             >
               Send to Tutor
             </button>
@@ -103,7 +104,8 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
                 setPreview(null);
                 onCancel();
               }}
-              className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-400 hover:bg-gray-800"
+              className="rounded-lg px-3 py-2 text-sm"
+              style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
             >
               Cancel
             </button>

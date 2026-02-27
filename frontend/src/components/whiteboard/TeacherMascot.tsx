@@ -30,7 +30,7 @@ export function TeacherMascot({ state }: TeacherMascotProps) {
       style={{ animation: state === "idle" || state === "thinking" ? "mascotFloat 3s ease-in-out infinite" : undefined }}
     >
       <svg width="80" height="90" viewBox="0 0 80 90" fill="none" xmlns="http://www.w3.org/2000/svg"
-        style={{ filter: "drop-shadow(0 0 12px rgba(0,229,255,0.3))" }}>
+        style={{ filter: "drop-shadow(0 0 12px rgba(99,102,241,0.3))" }}>
 
         {/* Body */}
         <ellipse cx="40" cy="58" rx="26" ry="28" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1.5" />
@@ -68,10 +68,10 @@ export function TeacherMascot({ state }: TeacherMascotProps) {
         <circle cx="48" cy="26" r="9" fill="#0a1628" />
 
         {/* Eyes - glow */}
-        <circle cx="32" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+        <circle cx="32" cy="26" r="5" fill="#818cf8" opacity="0.9">
           <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
         </circle>
-        <circle cx="48" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+        <circle cx="48" cy="26" r="5" fill="#818cf8" opacity="0.9">
           <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
         </circle>
 
@@ -112,14 +112,14 @@ export function TeacherMascot({ state }: TeacherMascotProps) {
       {/* Thinking dots */}
       {state === "thinking" && (
         <div className="absolute -top-2 left-1/2 -translate-x-1/2 flex gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "0ms" }} />
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "150ms" }} />
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "300ms" }} />
         </div>
       )}
 
       {/* State label */}
-      <div className="mt-1 text-center text-[9px] font-medium tracking-wider text-cyan-600/60 uppercase">
+      <div className="mt-1 text-center text-[9px] font-medium tracking-wider uppercase" style={{ color: "var(--text-muted)" }}>
         {state === "talking" && "explaining"}
         {state === "writing" && "drawing"}
         {state === "thinking" && "thinking..."}

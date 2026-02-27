@@ -165,7 +165,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
             </div>
             {/* Owl mascot (waving version) */}
             <svg width="80" height="90" viewBox="0 0 80 90" fill="none" xmlns="http://www.w3.org/2000/svg"
-              className="mx-auto mb-4" style={{ filter: "drop-shadow(0 0 16px rgba(0,229,255,0.4))", animation: "mascotFloat 3s ease-in-out infinite" }}>
+              className="mx-auto mb-4" style={{ filter: "drop-shadow(0 0 16px rgba(99,102,241,0.4))", animation: "mascotFloat 3s ease-in-out infinite" }}>
               <ellipse cx="40" cy="58" rx="26" ry="28" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1.5" />
               <ellipse cx="40" cy="64" rx="16" ry="18" fill="#0f1d35" opacity="0.6" />
               <ellipse cx="14" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1"
@@ -176,10 +176,10 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
               <path d="M58 12 L54 22 L62 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
               <circle cx="32" cy="26" r="9" fill="#0a1628" />
               <circle cx="48" cy="26" r="9" fill="#0a1628" />
-              <circle cx="32" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+              <circle cx="32" cy="26" r="5" fill="#818cf8" opacity="0.9">
                 <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
               </circle>
-              <circle cx="48" cy="26" r="5" fill="#00e5ff" opacity="0.9">
+              <circle cx="48" cy="26" r="5" fill="#818cf8" opacity="0.9">
                 <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
               </circle>
               <circle cx="33" cy="25" r="2" fill="#060a10" />
@@ -195,11 +195,11 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
               <ellipse cx="32" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
               <ellipse cx="48" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
             </svg>
-            <h2 className="text-xl font-semibold text-cyan-300/80 mb-1" style={{ textShadow: "0 0 20px rgba(0,229,255,0.3)" }}>
+            <h2 className="text-xl font-semibold mb-1" style={{ color: "var(--accent-light)", textShadow: "0 0 20px var(--accent-glow)" }}>
               Hi! I&apos;m MathBoard 🦉
             </h2>
-            <p className="text-sm text-gray-400 max-w-[280px] mx-auto">
-              Upload a photo of your homework or hold <kbd className="rounded border border-gray-700 px-1.5 py-0.5 text-[11px] text-cyan-400">Space</kbd> to ask me anything
+            <p className="text-sm max-w-[280px] mx-auto" style={{ color: "var(--text-secondary)" }}>
+              Upload a photo of your homework or hold <kbd className="rounded px-1.5 py-0.5 text-[11px]" style={{ border: "1px solid var(--border)", color: "var(--accent-light)" }}>Space</kbd> to ask me anything
             </p>
           </div>
         </div>
@@ -209,11 +209,11 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
       {/* Thinking indicator */}
       {isThinking && !isDrawing && commands.length > 0 && (
         <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-4 py-2"
-          style={{ background: "rgba(6,10,16,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(0,229,255,0.15)" }}>
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: "300ms" }} />
-          <span className="ml-1 text-[10px] text-cyan-400/70">thinking...</span>
+          style={{ background: "rgba(10,15,30,0.7)", backdropFilter: "blur(8px)", border: "1px solid var(--border)" }}>
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "0ms" }} />
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "150ms" }} />
+          <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "300ms" }} />
+          <span className="ml-1 text-[10px]" style={{ color: "var(--text-muted)" }}>thinking...</span>
         </div>
       )}
     </div>
