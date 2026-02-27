@@ -11,6 +11,7 @@ export default function Home() {
     isConnected,
     isListening,
     isSpeaking,
+    isThinking,
     connect,
     disconnect,
     sendImage,
@@ -78,7 +79,7 @@ export default function Home() {
           <Whiteboard
             commands={whiteboardCommands}
             isSpeaking={isSpeaking}
-            isThinking={!isSpeaking && !isListening && isConnected && whiteboardCommands.length > 0}
+            isThinking={isThinking}
           />
         </div>
 

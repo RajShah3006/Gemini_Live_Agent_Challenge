@@ -15,6 +15,7 @@ export function useSession() {
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [whiteboardCommands, setWhiteboardCommands] = useState<
     WhiteboardCommand[]
   >([]);
@@ -53,6 +54,7 @@ export function useSession() {
         const msg: ServerMessage = JSON.parse(event.data);
         switch (msg.type) {
           case "whiteboard":
+            setIsThinking(false);
             setWhiteboardCommands((prev) => [
               ...prev,
               msg.payload as unknown as WhiteboardCommand,
@@ -80,9 +82,14 @@ export function useSession() {
             // Flush audio queue on interruption
             if (msg.payload.interrupted) {
               stopAudio();
+              setIsThinking(false);
+            }
+            if (msg.payload.turn_complete) {
+              setIsThinking(false);
             }
             break;
           case "audio":
+            setIsThinking(false);
             if (msg.payload.data) {
               playChunk(msg.payload.data as string);
             }
@@ -136,6 +143,7 @@ export function useSession() {
   const stopTalking = useCallback(() => {
     micActiveRef.current = false;
     setIsListening(false);
+    setIsThinking(true);
   }, []);
 
   // Spacebar push-to-talk
@@ -174,6 +182,7 @@ export function useSession() {
     (base64: string) => {
       send("image", { data: base64 });
       addTranscript("user", "📷 Uploaded an image");
+      setIsThinking(true);
     },
     [send, addTranscript],
   );
@@ -182,6 +191,7 @@ export function useSession() {
     (text: string) => {
       send("text", { text });
       addTranscript("user", text);
+      setIsThinking(true);
     },
     [send, addTranscript],
   );
@@ -197,6 +207,7 @@ export function useSession() {
     isConnected,
     isListening,
     isSpeaking,
+    isThinking,
     connect,
     disconnect,
     sendImage,
