@@ -7,8 +7,9 @@ import { TeacherMascot, type MascotState } from "./TeacherMascot";
 import { WhiteboardToolbar } from "./WhiteboardToolbar";
 
 /* ── Lightboard Config ──────────────────────── */
-const CHAR_DELAY = 38;
-const LINE_DURATION = 350;
+const CHAR_DELAY = 55;
+const LINE_DURATION = 500;
+const PAUSE_BETWEEN = 400;
 const SHAPE_DURATION = 450;
 const BG = "#060a10";
 const GRID = "rgba(80,140,255,0.04)";
@@ -122,6 +123,10 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
       }
       await animateCmd(ctx, cmd, dprRef.current, setCursor);
       completedRef.current.push(cmd);
+      // Natural pause between commands — like a teacher pausing between lines
+      if (queueRef.current.length > 0 && queueRef.current[0].action !== "clear") {
+        await new Promise(r => setTimeout(r, PAUSE_BETWEEN));
+      }
     }
     setCursor(c => ({ ...c, show: false }));
     setIsDrawing(false);
