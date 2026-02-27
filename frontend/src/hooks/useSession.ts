@@ -69,6 +69,14 @@ export function useSession() {
               setIsSpeaking(msg.payload.speaking as boolean);
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
+            if (msg.payload.connected !== undefined)
+              setIsConnected(msg.payload.connected as boolean);
+            if (msg.payload.reconnected) {
+              console.log("[SESSION] Gemini auto-reconnected successfully");
+            }
+            if (msg.payload.reconnecting) {
+              console.log("[SESSION] Gemini reconnecting...");
+            }
             // Flush audio queue on interruption
             if (msg.payload.interrupted) {
               stopAudio();

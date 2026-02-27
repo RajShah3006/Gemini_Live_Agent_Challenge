@@ -134,6 +134,31 @@ class GeminiSession:
         self._session = await self._ctx.__aenter__()
         self._receive_task = asyncio.create_task(self._receive_loop())
 
+    async def _reconnect(self):
+        """Attempt to reconnect after an internal error."""
+        print("[RECONNECT] Cleaning up old session...")
+        try:
+            if self._session and self._ctx:
+                await self._ctx.__aexit__(None, None, None)
+        except Exception:
+            pass
+        self._session = None
+        self._ctx = None
+
+        for attempt in range(3):
+            wait = 1.5 * (attempt + 1)
+            print(f"[RECONNECT] Attempt {attempt + 1}/3 in {wait}s...")
+            await asyncio.sleep(wait)
+            try:
+                await self.connect()
+                print("[RECONNECT] Success!")
+                await self.on_status({"connected": True, "reconnected": True})
+                return True
+            except Exception as e:
+                print(f"[RECONNECT] Attempt {attempt + 1} failed: {e}")
+        print("[RECONNECT] All attempts failed")
+        return False
+
     async def _receive_loop(self):
         """Continuously receive responses from Gemini."""
         try:
@@ -149,12 +174,12 @@ class GeminiSession:
         except Exception as e:
             error_str = str(e)
             print(f"Receive loop error: {error_str}")
-            # On "internal error" from Gemini, notify frontend but don't crash
             if "internal" in error_str.lower():
-                print("[WARN] Gemini internal error — session may need reconnect")
-                await self.on_status({"error": "Gemini had an internal error. Please reconnect.", "connected": False})
-            else:
-                await self.on_status({"error": error_str, "connected": False})
+                print("[WARN] Gemini internal error — attempting auto-reconnect...")
+                await self.on_status({"error": "Gemini internal error — reconnecting...", "reconnecting": True})
+                if await self._reconnect():
+                    return  # reconnect starts a new receive loop via connect()
+            await self.on_status({"error": f"Session lost: {error_str}", "connected": False})
 
     async def _handle_response(self, response):
         """Process a single response from Gemini."""
