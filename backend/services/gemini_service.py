@@ -20,86 +20,49 @@ def _schema(props: dict, required: list[str] | None = None) -> types.Schema:
         required=required or [],
     )
 
+# Keep tools minimal — native audio models crash with too many tool declarations
 WHITEBOARD_DECLS = [
     types.FunctionDeclaration(
+        name="clear_whiteboard",
+        description="Clear the entire whiteboard before starting a new problem",
+        parameters=_schema({}),
+    ),
+    types.FunctionDeclaration(
+        name="step_marker",
+        description="Place a step number label (e.g. Step 1, Step 2) on the whiteboard",
+        parameters=_schema({
+            "step": {"type": "NUMBER", "description": "Step number"},
+            "x": {"type": "NUMBER", "description": "X coordinate"},
+            "y": {"type": "NUMBER", "description": "Y coordinate"},
+        }, ["step", "x", "y"]),
+    ),
+    types.FunctionDeclaration(
         name="draw_text",
-        description="Draw plain text on the whiteboard. ALWAYS call this tool — never just speak text without drawing it.",
+        description="Draw plain text on the whiteboard — use for labels, explanations, commentary",
         parameters=_schema({
             "text": {"type": "STRING", "description": "Text to display"},
             "x": {"type": "NUMBER", "description": "X coordinate (px from left, keep 40-700)"},
             "y": {"type": "NUMBER", "description": "Y coordinate (px from top)"},
             "size": {"type": "NUMBER", "description": "Font size in px (default 24)"},
-            "color": {"type": "STRING", "description": "CSS color (default white)"},
         }, ["text", "x", "y"]),
     ),
     types.FunctionDeclaration(
         name="draw_latex",
-        description="Draw a math expression on the whiteboard. Use for ALL math: equations, fractions, variables, numbers. MUST call this for every math expression.",
+        description="Draw a math expression on the whiteboard — use for ALL math: equations, fractions, variables",
         parameters=_schema({
             "latex": {"type": "STRING", "description": "Math expression, e.g. 'x = (-b ± √(b²-4ac)) / 2a'"},
             "x": {"type": "NUMBER", "description": "X coordinate"},
             "y": {"type": "NUMBER", "description": "Y coordinate"},
             "size": {"type": "NUMBER", "description": "Font size (default 28)"},
-            "color": {"type": "STRING", "description": "CSS color (default cyan)"},
         }, ["latex", "x", "y"]),
     ),
     types.FunctionDeclaration(
         name="draw_line",
-        description="Draw a straight line on the whiteboard",
+        description="Draw a straight line on the whiteboard (for underlines, dividers, diagrams)",
         parameters=_schema({
             "x1": {"type": "NUMBER"}, "y1": {"type": "NUMBER"},
             "x2": {"type": "NUMBER"}, "y2": {"type": "NUMBER"},
-            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
         }, ["x1", "y1", "x2", "y2"]),
-    ),
-    types.FunctionDeclaration(
-        name="draw_arrow",
-        description="Draw an arrow on the whiteboard",
-        parameters=_schema({
-            "x1": {"type": "NUMBER"}, "y1": {"type": "NUMBER"},
-            "x2": {"type": "NUMBER"}, "y2": {"type": "NUMBER"},
-            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
-        }, ["x1", "y1", "x2", "y2"]),
-    ),
-    types.FunctionDeclaration(
-        name="draw_circle",
-        description="Draw a circle on the whiteboard",
-        parameters=_schema({
-            "cx": {"type": "NUMBER"}, "cy": {"type": "NUMBER"},
-            "r": {"type": "NUMBER"},
-            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
-        }, ["cx", "cy", "r"]),
-    ),
-    types.FunctionDeclaration(
-        name="draw_rect",
-        description="Draw a rectangle on the whiteboard",
-        parameters=_schema({
-            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
-            "w": {"type": "NUMBER"}, "h": {"type": "NUMBER"},
-            "color": {"type": "STRING"}, "width": {"type": "NUMBER"},
-        }, ["x", "y", "w", "h"]),
-    ),
-    types.FunctionDeclaration(
-        name="highlight",
-        description="Highlight a rectangular area (semi-transparent overlay)",
-        parameters=_schema({
-            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
-            "w": {"type": "NUMBER"}, "h": {"type": "NUMBER"},
-            "color": {"type": "STRING"},
-        }, ["x", "y", "w", "h"]),
-    ),
-    types.FunctionDeclaration(
-        name="step_marker",
-        description="Place a step number label on the whiteboard",
-        parameters=_schema({
-            "step": {"type": "NUMBER", "description": "Step number"},
-            "x": {"type": "NUMBER"}, "y": {"type": "NUMBER"},
-        }, ["step", "x", "y"]),
-    ),
-    types.FunctionDeclaration(
-        name="clear_whiteboard",
-        description="Clear the entire whiteboard before starting a new problem",
-        parameters=_schema({}),
     ),
 ]
 
