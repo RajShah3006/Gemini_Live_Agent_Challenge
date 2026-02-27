@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Floating toolbar for the whiteboard: screenshot, fullscreen, zoom.
+ * Floating toolbar for the whiteboard: screenshot, PDF export, fullscreen, zoom.
  */
 
 import { useCallback, useState } from "react";
@@ -21,6 +21,19 @@ export function WhiteboardToolbar({ canvasRef, containerRef }: WhiteboardToolbar
     link.download = `mathboard-${Date.now()}.png`;
     link.href = canvas.toDataURL("image/png");
     link.click();
+  }, [canvasRef]);
+
+  const handlePDF = useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const { jsPDF } = await import("jspdf");
+    const imgData = canvas.toDataURL("image/png");
+    const cw = canvas.width, ch = canvas.height;
+    // A4 landscape or portrait based on aspect ratio
+    const landscape = cw > ch;
+    const pdf = new jsPDF({ orientation: landscape ? "landscape" : "portrait", unit: "px", format: [cw, ch] });
+    pdf.addImage(imgData, "PNG", 0, 0, cw, ch);
+    pdf.save(`mathboard-${Date.now()}.pdf`);
   }, [canvasRef]);
 
   const handleFullscreen = useCallback(() => {
@@ -55,6 +68,8 @@ export function WhiteboardToolbar({ canvasRef, containerRef }: WhiteboardToolbar
       }}
     >
       <ToolBtn title="Screenshot" onClick={handleScreenshot}>📸</ToolBtn>
+      <ToolBtn title="Export PDF" onClick={handlePDF}>📄</ToolBtn>
+      <div className="h-4 w-px mx-0.5" style={{ background: "var(--border)" }} />
       <ToolBtn title="Zoom out" onClick={() => handleZoom(-1)}>−</ToolBtn>
       <span className="text-[10px] min-w-[32px] text-center" style={{ color: "var(--text-muted)" }}>{Math.round(zoom * 100)}%</span>
       <ToolBtn title="Zoom in" onClick={() => handleZoom(1)}>+</ToolBtn>

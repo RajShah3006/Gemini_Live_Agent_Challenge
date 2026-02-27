@@ -18,12 +18,21 @@ const FONT = "Kalam, 'Architects Daughter', 'Segoe Script', cursive";
 // Neon palette
 const NEON_TEXT = "#ffffff";
 const NEON_TEXT_GLOW = "#88ccff";
-const NEON_MATH = "#00e5ff";
-const NEON_MATH_GLOW = "#0090cc";
 const NEON_STEP = "#00ffaa";
 const NEON_STEP_GLOW = "#009966";
 const NEON_LINE = "#ffffff";
 const NEON_LINE_GLOW = "#5599ff";
+
+// Multi-color: cycle through these per step
+const STEP_COLORS = [
+  { main: "#00e5ff", glow: "#0090cc" },   // cyan
+  { main: "#a78bfa", glow: "#7c3aed" },   // purple
+  { main: "#f472b6", glow: "#db2777" },   // pink
+  { main: "#fbbf24", glow: "#d97706" },   // amber
+  { main: "#34d399", glow: "#059669" },   // emerald
+  { main: "#60a5fa", glow: "#2563eb" },   // blue
+  { main: "#fb923c", glow: "#ea580c" },   // orange
+];
 
 /* ── LaTeX → human-readable math ── */
 function latexToHuman(s: string): string {
@@ -109,6 +118,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
   const viewWidthRef = useRef(800);
   const [cursor, setCursor] = useState({ x: 0, y: 0, show: false, color: "#00e5ff" });
   const [isDrawing, setIsDrawing] = useState(false);
+  const currentStepRef = useRef(0);
 
   // Derive mascot state
   const mascotState: MascotState = isDrawing ? "writing" : isSpeaking ? "talking" : isThinking ? "thinking" : "idle";
@@ -139,7 +149,10 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     clearBoard(ctx, w, h);
-    completedRef.current.forEach(c => drawInstant(ctx, c, dpr));
+    completedRef.current.forEach(c => {
+      const step = (c as WhiteboardCommand & { _step?: number })._step || 0;
+      drawInstant(ctx, c, dpr, step);
+    });
   }
 
   function autoScroll(y: number) {
@@ -174,6 +187,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
       if (cmd.action === "clear") {
         completedRef.current = [];
         maxYRef.current = 0;
+        currentStepRef.current = 0;
         resizeCanvas();
         if (containerRef.current) containerRef.current.scrollTop = 0;
         setCursor(c => ({ ...c, show: false }));
@@ -181,14 +195,18 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
         continue;
       }
       setIsDrawing(true);
+      // Track step for color cycling
+      if (cmd.action === "step_marker") {
+        currentStepRef.current = (cmd.params.step as number) || currentStepRef.current + 1;
+      }
       // Grow canvas and scroll to where we're about to draw
       const cmdY = getCommandY(cmd);
       if (cmdY > 0) {
         trackY(cmdY);
         autoScroll(cmdY);
       }
-      await animateCmd(ctx, cmd, dprRef.current, setCursor);
-      completedRef.current.push(cmd);
+      await animateCmd(ctx, cmd, dprRef.current, setCursor, currentStepRef.current);
+      completedRef.current.push({ ...cmd, _step: currentStepRef.current } as WhiteboardCommand & { _step: number });
       // Natural pause between commands — like a teacher pausing between lines
       if (queueRef.current.length > 0 && queueRef.current[0].action !== "clear") {
         await new Promise(r => setTimeout(r, PAUSE_BETWEEN));
@@ -344,13 +362,20 @@ type SetCursor = React.Dispatch<
   React.SetStateAction<{ x: number; y: number; show: boolean; color: string }>
 >;
 
+/* ═══ Step-based color helper ═══ */
+function getStepColor(step: number) {
+  if (step <= 0) return STEP_COLORS[0];
+  return STEP_COLORS[(step - 1) % STEP_COLORS.length];
+}
+
 /* ═══ Animated command renderer ═══ */
 
 function animateCmd(
   ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
-  dpr: number, setCursor: SetCursor,
+  dpr: number, setCursor: SetCursor, step: number,
 ): Promise<void> {
   const p = cmd.params;
+  const sc = getStepColor(step);
   return new Promise(resolve => {
     switch (cmd.action) {
       case "draw_text":
@@ -360,8 +385,8 @@ function animateCmd(
         const text = isLatex ? latexToHuman(raw) : raw;
         const x = p.x as number, y = p.y as number;
         const size = (p.size as number) || (isLatex ? 28 : 24);
-        const color = (p.color as string) || (isLatex ? NEON_MATH : NEON_TEXT);
-        const glow = isLatex ? NEON_MATH_GLOW : NEON_TEXT_GLOW;
+        const color = isLatex ? sc.main : NEON_TEXT;
+        const glow = isLatex ? sc.glow : NEON_TEXT_GLOW;
         ctx.font = `${size}px ${FONT}`;
         let i = 0;
         const tick = () => {
@@ -457,8 +482,8 @@ function animateCmd(
         const tick = () => {
           if (i >= label.length) { ctx.shadowBlur = 0; resolve(); return; }
           const xOff = ctx.measureText(label.slice(0, i)).width;
-          glowText(ctx, label[i], sx + xOff, sy, NEON_STEP, NEON_STEP_GLOW, 20, dpr, true);
-          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: NEON_STEP_GLOW });
+          glowText(ctx, label[i], sx + xOff, sy, sc.main, sc.glow, 20, dpr, true);
+          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: sc.glow });
           i++;
           setTimeout(tick, 28);
         };
@@ -499,21 +524,22 @@ function neonLine(
 
 function drawInstant(
   ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
-  dpr: number,
+  dpr: number, step = 0,
 ) {
   const p = cmd.params;
+  const sc = getStepColor(step);
   switch (cmd.action) {
     case "clear":
       break;
     case "draw_text":
       glowText(ctx, p.text as string, p.x as number, p.y as number,
-        (p.color as string) || NEON_TEXT, NEON_TEXT_GLOW,
+        NEON_TEXT, NEON_TEXT_GLOW,
         (p.size as number) || 24, dpr);
       ctx.shadowBlur = 0;
       break;
     case "draw_latex":
       glowText(ctx, latexToHuman(p.latex as string), p.x as number, p.y as number,
-        (p.color as string) || NEON_MATH, NEON_MATH_GLOW,
+        sc.main, sc.glow,
         (p.size as number) || 28, dpr);
       ctx.shadowBlur = 0;
       break;
@@ -521,48 +547,48 @@ function drawInstant(
       ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(p.x1 as number, p.y1 as number);
       ctx.lineTo(p.x2 as number, p.y2 as number);
-      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
       ctx.shadowBlur = 0;
       break;
     case "draw_arrow": {
       const x1 = p.x1 as number, y1 = p.y1 as number,
         x2 = p.x2 as number, y2 = p.y2 as number;
-      const color = (p.color as string) || NEON_LINE, w = (p.width as number) || 2;
+      const w = (p.width as number) || 2;
       ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
-      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, w, dpr);
       const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
       ctx.beginPath(); ctx.moveTo(x2, y2);
       ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6));
-      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, w, dpr);
       ctx.beginPath(); ctx.moveTo(x2, y2);
       ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6));
-      glowStroke(ctx, color, NEON_LINE_GLOW, w, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, w, dpr);
       ctx.shadowBlur = 0;
       break;
     }
     case "draw_circle":
       ctx.beginPath();
       ctx.arc(p.cx as number, p.cy as number, p.r as number, 0, 2 * Math.PI);
-      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
       ctx.shadowBlur = 0;
       break;
     case "draw_rect":
       ctx.beginPath();
       ctx.rect(p.x as number, p.y as number, p.w as number, p.h as number);
-      glowStroke(ctx, (p.color as string) || NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
+      glowStroke(ctx, NEON_LINE, NEON_LINE_GLOW, (p.width as number) || 2, dpr);
       ctx.shadowBlur = 0;
       break;
     case "highlight":
       ctx.shadowColor = "rgba(0,229,255,0.3)";
       ctx.shadowBlur = 20 * dpr;
-      ctx.fillStyle = (p.color as string) || "rgba(0,229,255,0.06)";
+      ctx.fillStyle = "rgba(0,229,255,0.06)";
       ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
       ctx.shadowBlur = 0;
       break;
     case "step_marker":
       glowText(ctx, `Step ${p.step as number}`, p.x as number, p.y as number,
-        NEON_STEP, NEON_STEP_GLOW, 20, dpr, true);
+        sc.main, sc.glow, 20, dpr, true);
       ctx.shadowBlur = 0;
       break;
   }

@@ -79,6 +79,18 @@ RULES — follow strictly:
 6. y starts at 60, increment ~70px. x between 40-700. Solve COMPLETELY.
 7. Pace tool calls with your speech. One idea at a time.
 
+HOMEWORK GRADING — when the student sends an image:
+1. Identify each problem in the image.
+2. Check their work step by step.
+3. For correct answers, write "✓ Correct!" with draw_text.
+4. For wrong answers, show the correct solution and explain the mistake.
+5. Give an overall score at the end (e.g. "Score: 4/5").
+
+RE-EXPLAINING — if the student says "explain step 2 again" or "I don't understand":
+1. Do NOT clear the whiteboard.
+2. Continue drawing BELOW the existing content (use higher y values).
+3. Re-explain that specific step in more detail with a different approach.
+
 START DRAWING IMMEDIATELY when asked a question."""
 
 MODEL = "gemini-2.5-flash-native-audio-latest"
