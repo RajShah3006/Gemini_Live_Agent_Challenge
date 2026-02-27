@@ -25,6 +25,72 @@ const NEON_STEP_GLOW = "#009966";
 const NEON_LINE = "#ffffff";
 const NEON_LINE_GLOW = "#5599ff";
 
+/* ── LaTeX → human-readable math ── */
+function latexToHuman(s: string): string {
+  let r = s;
+  // Handle fractions with nested braces (run multiple times for nesting)
+  for (let i = 0; i < 3; i++) {
+    r = r.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "($1)/($2)");
+  }
+  // Square root
+  r = r.replace(/\\sqrt\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "√($1)");
+  // Integrals
+  r = r.replace(/\\int_\{([^}]*)}\^\{([^}]*)}/g, "∫[$1→$2]");
+  r = r.replace(/\\int/g, "∫");
+  // Summation / product
+  r = r.replace(/\\sum_\{([^}]*)}\^\{([^}]*)}/g, "Σ[$1→$2]");
+  r = r.replace(/\\sum/g, "Σ");
+  r = r.replace(/\\prod/g, "Π");
+  // Limits
+  r = r.replace(/\\lim_\{([^}]*)}/g, "lim($1)");
+  r = r.replace(/\\lim/g, "lim");
+  // Infinity
+  r = r.replace(/\\infty/g, "∞");
+  // Greek letters
+  r = r.replace(/\\alpha/g, "α"); r = r.replace(/\\beta/g, "β");
+  r = r.replace(/\\gamma/g, "γ"); r = r.replace(/\\delta/g, "δ");
+  r = r.replace(/\\epsilon/g, "ε"); r = r.replace(/\\theta/g, "θ");
+  r = r.replace(/\\lambda/g, "λ"); r = r.replace(/\\mu/g, "μ");
+  r = r.replace(/\\pi/g, "π"); r = r.replace(/\\sigma/g, "σ");
+  r = r.replace(/\\phi/g, "φ"); r = r.replace(/\\omega/g, "ω");
+  r = r.replace(/\\Delta/g, "Δ"); r = r.replace(/\\Sigma/g, "Σ");
+  // Trig / log
+  r = r.replace(/\\sin/g, "sin"); r = r.replace(/\\cos/g, "cos");
+  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\log/g, "log");
+  r = r.replace(/\\ln/g, "ln"); r = r.replace(/\\exp/g, "exp");
+  // Superscript: x^{2} → x² (common ones), else x^(n)
+  r = r.replace(/\^\{0}/g, "⁰"); r = r.replace(/\^\{1}/g, "¹");
+  r = r.replace(/\^\{2}/g, "²"); r = r.replace(/\^\{3}/g, "³");
+  r = r.replace(/\^\{4}/g, "⁴"); r = r.replace(/\^\{5}/g, "⁵");
+  r = r.replace(/\^\{([^}]*)}/g, "^($1)");
+  r = r.replace(/\^2/g, "²"); r = r.replace(/\^3/g, "³");
+  r = r.replace(/\^n/g, "ⁿ");
+  // Subscript: _{n} → _n
+  r = r.replace(/_\{([^}]*)}/g, "_$1");
+  // Operators
+  r = r.replace(/\\times/g, "×"); r = r.replace(/\\cdot/g, "·");
+  r = r.replace(/\\div/g, "÷"); r = r.replace(/\\pm/g, "±");
+  r = r.replace(/\\neq/g, "≠"); r = r.replace(/\\leq/g, "≤");
+  r = r.replace(/\\geq/g, "≥"); r = r.replace(/\\approx/g, "≈");
+  r = r.replace(/\\rightarrow/g, "→"); r = r.replace(/\\implies/g, "⟹");
+  r = r.replace(/\\Rightarrow/g, "⇒");
+  // Arrows
+  r = r.replace(/\\to/g, "→");
+  // Misc
+  r = r.replace(/\\partial/g, "∂"); r = r.replace(/\\nabla/g, "∇");
+  r = r.replace(/\\forall/g, "∀"); r = r.replace(/\\exists/g, "∃");
+  // Clean up remaining LaTeX formatting
+  r = r.replace(/\\,/g, " "); r = r.replace(/\\;/g, " ");
+  r = r.replace(/\\!/g, ""); r = r.replace(/\\quad/g, "  ");
+  r = r.replace(/\\left/g, ""); r = r.replace(/\\right/g, "");
+  r = r.replace(/\\text\{([^}]*)}/g, "$1");
+  r = r.replace(/\\mathrm\{([^}]*)}/g, "$1");
+  r = r.replace(/\{/g, ""); r = r.replace(/}/g, "");
+  // Collapse multiple spaces
+  r = r.replace(/  +/g, " ").trim();
+  return r;
+}
+
 interface WhiteboardProps {
   commands: WhiteboardCommand[];
   isSpeaking?: boolean;
@@ -290,7 +356,8 @@ function animateCmd(
       case "draw_text":
       case "draw_latex": {
         const isLatex = cmd.action === "draw_latex";
-        const text = (isLatex ? p.latex : p.text) as string;
+        const raw = (isLatex ? p.latex : p.text) as string;
+        const text = isLatex ? latexToHuman(raw) : raw;
         const x = p.x as number, y = p.y as number;
         const size = (p.size as number) || (isLatex ? 28 : 24);
         const color = (p.color as string) || (isLatex ? NEON_MATH : NEON_TEXT);
@@ -445,7 +512,7 @@ function drawInstant(
       ctx.shadowBlur = 0;
       break;
     case "draw_latex":
-      glowText(ctx, p.latex as string, p.x as number, p.y as number,
+      glowText(ctx, latexToHuman(p.latex as string), p.x as number, p.y as number,
         (p.color as string) || NEON_MATH, NEON_MATH_GLOW,
         (p.size as number) || 28, dpr);
       ctx.shadowBlur = 0;
