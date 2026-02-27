@@ -21,6 +21,7 @@ export interface WhiteboardCommand {
     | "draw_arrow"
     | "draw_circle"
     | "draw_rect"
+    | "draw_graph"
     | "highlight"
     | "step_marker";
   params: Record<string, unknown>;

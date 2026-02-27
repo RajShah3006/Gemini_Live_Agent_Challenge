@@ -313,10 +313,165 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false }:
 
 function getCommandY(cmd: WhiteboardCommand): number {
   const p = cmd.params;
-  if (p.y !== undefined) return p.y as number;
+  if (p.y !== undefined) {
+    if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
+    return p.y as number;
+  }
   if (p.y1 !== undefined) return Math.max(p.y1 as number, p.y2 as number);
   if (p.cy !== undefined) return (p.cy as number) + (p.r as number || 0);
   return 0;
+}
+
+/* ═══ Safe math evaluator for graph plotting ═══ */
+
+function evalMathFn(expr: string, x: number): number {
+  try {
+    const fn = new Function("x", "Math", `return (${expr});`);
+    const result = fn(x, Math);
+    return typeof result === "number" && isFinite(result) ? result : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
+/* ═══ Graph drawing helpers ═══ */
+
+function drawGraphAxes(
+  ctx: CanvasRenderingContext2D,
+  gx: number, gy: number, gw: number, gh: number,
+  xMin: number, xMax: number, yMin: number, yMax: number,
+  dpr: number,
+) {
+  const AXIS_COLOR = "#5599ff";
+  const AXIS_GLOW = "#2255aa";
+  const TICK_COLOR = "#88bbff";
+  const LABEL_SIZE = 13;
+
+  // Map math coords to canvas coords
+  const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
+  const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
+
+  // Draw axes if origin is visible
+  const ox = mapX(0), oy = mapY(0);
+  ctx.lineCap = "round";
+
+  // X-axis
+  if (yMin <= 0 && yMax >= 0) {
+    ctx.beginPath(); ctx.moveTo(gx, oy); ctx.lineTo(gx + gw, oy);
+    glowStroke(ctx, AXIS_COLOR, AXIS_GLOW, 1.5, dpr);
+    // Arrow tip
+    ctx.beginPath(); ctx.moveTo(gx + gw, oy);
+    ctx.lineTo(gx + gw - 8, oy - 4); ctx.moveTo(gx + gw, oy);
+    ctx.lineTo(gx + gw - 8, oy + 4);
+    glowStroke(ctx, AXIS_COLOR, AXIS_GLOW, 1.5, dpr);
+  }
+  // Y-axis
+  if (xMin <= 0 && xMax >= 0) {
+    ctx.beginPath(); ctx.moveTo(ox, gy + gh); ctx.lineTo(ox, gy);
+    glowStroke(ctx, AXIS_COLOR, AXIS_GLOW, 1.5, dpr);
+    // Arrow tip
+    ctx.beginPath(); ctx.moveTo(ox, gy);
+    ctx.lineTo(ox - 4, gy + 8); ctx.moveTo(ox, gy);
+    ctx.lineTo(ox + 4, gy + 8);
+    glowStroke(ctx, AXIS_COLOR, AXIS_GLOW, 1.5, dpr);
+  }
+
+  // Tick marks and labels
+  const xRange = xMax - xMin;
+  const yRange = yMax - yMin;
+  const xStep = niceStep(xRange);
+  const yStep = niceStep(yRange);
+
+  ctx.shadowBlur = 0;
+  ctx.font = `${LABEL_SIZE}px ${FONT}`;
+  ctx.fillStyle = TICK_COLOR;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // X ticks
+  const tickY = (yMin <= 0 && yMax >= 0) ? oy : gy + gh;
+  for (let v = Math.ceil(xMin / xStep) * xStep; v <= xMax; v += xStep) {
+    if (Math.abs(v) < xStep * 0.01) continue; // skip 0
+    const px = mapX(v);
+    ctx.beginPath(); ctx.moveTo(px, tickY - 4); ctx.lineTo(px, tickY + 4);
+    ctx.strokeStyle = TICK_COLOR; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillText(formatTickLabel(v), px, tickY + 6);
+  }
+
+  // Y ticks
+  const tickX = (xMin <= 0 && xMax >= 0) ? ox : gx;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let v = Math.ceil(yMin / yStep) * yStep; v <= yMax; v += yStep) {
+    if (Math.abs(v) < yStep * 0.01) continue;
+    const py = mapY(v);
+    ctx.beginPath(); ctx.moveTo(tickX - 4, py); ctx.lineTo(tickX + 4, py);
+    ctx.strokeStyle = TICK_COLOR; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillText(formatTickLabel(v), tickX - 8, py);
+  }
+
+  // "x" and "y" axis labels
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.fillText("x", gx + gw + 12, tickY - 4);
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText("y", (xMin <= 0 && xMax >= 0 ? ox : gx) + 8, gy - 8);
+
+  ctx.shadowBlur = 0;
+}
+
+function niceStep(range: number): number {
+  const rough = range / 8;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  if (norm <= 1.5) return mag;
+  if (norm <= 3.5) return 2 * mag;
+  if (norm <= 7.5) return 5 * mag;
+  return 10 * mag;
+}
+
+function formatTickLabel(v: number): string {
+  return Math.abs(v) >= 1000 ? v.toExponential(0) : parseFloat(v.toFixed(2)).toString();
+}
+
+function drawGraphCurve(
+  ctx: CanvasRenderingContext2D,
+  fn: string, gx: number, gy: number, gw: number, gh: number,
+  xMin: number, xMax: number, yMin: number, yMax: number,
+  color: string, glow: string, dpr: number,
+) {
+  const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
+  const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
+  const SAMPLES = 300;
+  const dx = (xMax - xMin) / SAMPLES;
+
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath();
+  let penDown = false;
+
+  for (let i = 0; i <= SAMPLES; i++) {
+    const xv = xMin + i * dx;
+    const yv = evalMathFn(fn, xv);
+    if (isNaN(yv) || yv < yMin - 5 || yv > yMax + 5) {
+      penDown = false;
+      continue;
+    }
+    const px = mapX(xv), py = mapY(yv);
+    if (!penDown) { ctx.moveTo(px, py); penDown = true; }
+    else ctx.lineTo(px, py);
+  }
+
+  glowStroke(ctx, color, glow, 2.5, dpr);
+  ctx.shadowBlur = 0;
+}
+
+function drawGraphLabel(
+  ctx: CanvasRenderingContext2D,
+  label: string, gx: number, gy: number, gw: number,
+  color: string, glow: string, dpr: number,
+) {
+  const text = latexToHuman(label);
+  glowText(ctx, text, gx + gw / 2 - ctx.measureText(text).width / 2, gy - 20, color, glow, 18, dpr, true);
+  ctx.shadowBlur = 0;
 }
 
 /* ═══ Helpers: neon glow drawing ═══ */
@@ -491,6 +646,75 @@ function animateCmd(
         break;
       }
 
+      case "draw_graph": {
+        const fn = p.fn as string;
+        const label = (p.label as string) || "";
+        const xMin = (p.x_min as number) ?? -5, xMax = (p.x_max as number) ?? 5;
+        const yMin = (p.y_min as number) ?? -5, yMax = (p.y_max as number) ?? 5;
+        const gx = (p.x as number) ?? 60, gy = (p.y as number) ?? 60;
+        const gw = (p.width as number) ?? 500, gh = (p.height as number) ?? 350;
+
+        // Draw label
+        if (label) {
+          drawGraphLabel(ctx, label, gx, gy, gw, sc.main, sc.glow, dpr);
+        }
+        // Draw axes instantly
+        drawGraphAxes(ctx, gx, gy, gw, gh, xMin, xMax, yMin, yMax, dpr);
+
+        // Animate curve drawing
+        const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
+        const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
+        const SAMPLES = 300;
+        const dx = (xMax - xMin) / SAMPLES;
+        const CURVE_DURATION = 2000;
+        const t0 = performance.now();
+
+        // Pre-compute all points
+        const points: { px: number; py: number; valid: boolean }[] = [];
+        for (let si = 0; si <= SAMPLES; si++) {
+          const xv = xMin + si * dx;
+          const yv = evalMathFn(fn, xv);
+          const valid = !isNaN(yv) && yv >= yMin - 5 && yv <= yMax + 5;
+          points.push({ px: valid ? mapX(xv) : 0, py: valid ? mapY(yv) : 0, valid });
+        }
+
+        let lastDrawn = 0;
+        const animStep = () => {
+          const elapsed = performance.now() - t0;
+          const progress = Math.min(elapsed / CURVE_DURATION, 1);
+          const targetIdx = Math.floor(progress * SAMPLES);
+
+          // Draw segments from lastDrawn to targetIdx
+          ctx.lineCap = "round"; ctx.lineJoin = "round";
+          let penDown = false;
+          ctx.beginPath();
+          // Find the pen state at lastDrawn
+          for (let si = 0; si <= targetIdx; si++) {
+            if (!points[si].valid) { penDown = false; continue; }
+            if (si < lastDrawn && si > 0) { penDown = points[si - 1].valid; continue; }
+            if (!penDown) { ctx.moveTo(points[si].px, points[si].py); penDown = true; }
+            else ctx.lineTo(points[si].px, points[si].py);
+          }
+          glowStroke(ctx, sc.main, sc.glow, 2.5, dpr);
+          ctx.shadowBlur = 0;
+
+          // Move cursor to latest point
+          if (points[targetIdx]?.valid) {
+            setCursor({ x: points[targetIdx].px, y: points[targetIdx].py, show: true, color: sc.glow });
+          }
+
+          lastDrawn = targetIdx;
+          if (progress < 1) {
+            requestAnimationFrame(animStep);
+          } else {
+            setCursor(c => ({ ...c, show: false }));
+            resolve();
+          }
+        };
+        requestAnimationFrame(animStep);
+        break;
+      }
+
       default: resolve();
     }
   });
@@ -591,6 +815,18 @@ function drawInstant(
         sc.main, sc.glow, 20, dpr, true);
       ctx.shadowBlur = 0;
       break;
+    case "draw_graph": {
+      const fn = p.fn as string;
+      const label = (p.label as string) || "";
+      const xMin = (p.x_min as number) ?? -5, xMax = (p.x_max as number) ?? 5;
+      const yMin = (p.y_min as number) ?? -5, yMax = (p.y_max as number) ?? 5;
+      const gx = (p.x as number) ?? 60, gy = (p.y as number) ?? 60;
+      const gw = (p.width as number) ?? 500, gh = (p.height as number) ?? 350;
+      if (label) drawGraphLabel(ctx, label, gx, gy, gw, sc.main, sc.glow, dpr);
+      drawGraphAxes(ctx, gx, gy, gw, gh, xMin, xMax, yMin, yMax, dpr);
+      drawGraphCurve(ctx, fn, gx, gy, gw, gh, xMin, xMax, yMin, yMax, sc.main, sc.glow, dpr);
+      break;
+    }
   }
 }
 

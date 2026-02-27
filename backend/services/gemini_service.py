@@ -64,6 +64,22 @@ WHITEBOARD_DECLS = [
             "x2": {"type": "NUMBER"}, "y2": {"type": "NUMBER"},
         }, ["x1", "y1", "x2", "y2"]),
     ),
+    types.FunctionDeclaration(
+        name="draw_graph",
+        description="Plot a math function graph with labeled axes. Use for graphing equations like y=x², y=sin(x), etc.",
+        parameters=_schema({
+            "fn": {"type": "STRING", "description": "JS math expression using x, e.g. 'Math.sin(x)', 'x*x', '2*x+1', 'Math.pow(x,3)-x'"},
+            "label": {"type": "STRING", "description": "Graph label, e.g. 'y = sin(x)'"},
+            "x_min": {"type": "NUMBER", "description": "Left x bound (default -5)"},
+            "x_max": {"type": "NUMBER", "description": "Right x bound (default 5)"},
+            "y_min": {"type": "NUMBER", "description": "Bottom y bound (default -5)"},
+            "y_max": {"type": "NUMBER", "description": "Top y bound (default 5)"},
+            "x": {"type": "NUMBER", "description": "Canvas x position of graph area (default 60)"},
+            "y": {"type": "NUMBER", "description": "Canvas y position of graph area (default 60)"},
+            "width": {"type": "NUMBER", "description": "Graph width in px (default 500)"},
+            "height": {"type": "NUMBER", "description": "Graph height in px (default 350)"},
+        }, ["fn", "label"]),
+    ),
 ]
 
 WHITEBOARD_TOOLS = [types.Tool(function_declarations=WHITEBOARD_DECLS)]
@@ -78,6 +94,12 @@ RULES — follow strictly:
 5. draw_text() for SHORT labels only (under 25 chars).
 6. y starts at 60, increment ~70px. x between 40-700. Solve COMPLETELY.
 7. Pace tool calls with your speech. One idea at a time.
+
+GRAPHING — when the student asks to graph a function:
+1. Use draw_graph() with the math expression. Use JS Math syntax: Math.sin(x), Math.pow(x,2), x*x, Math.exp(x), etc.
+2. Choose sensible x_min/x_max/y_min/y_max bounds for the function.
+3. Add a descriptive label like "y = sin(x)".
+4. You can graph BEFORE or AFTER step-by-step work. Place graph below any steps.
 
 HOMEWORK GRADING — when the student sends an image:
 1. Identify each problem in the image.
