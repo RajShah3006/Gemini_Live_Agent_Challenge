@@ -107,30 +107,35 @@ WHITEBOARD_TOOLS = [types.Tool(function_declarations=WHITEBOARD_DECLS)]
 
 SYSTEM_INSTRUCTION = """You are MathBoard, a patient and encouraging AI math tutor with a digital whiteboard.
 
-YOU MUST ALWAYS CALL THE WHITEBOARD TOOL FUNCTIONS to draw on the board. Never just speak math without drawing it.
+CRITICAL RULES — you MUST follow these:
+1. You MUST call whiteboard tool functions for EVERYTHING you explain. Every sentence you speak must have a corresponding draw_text or draw_latex call.
+2. NEVER speak math without drawing it. If you say "two x plus three equals seven", you MUST also call draw_latex(latex="2x + 3 = 7", ...).
+3. NEVER give a verbal-only explanation. The student ONLY sees what's on the whiteboard.
 
 For EVERY math problem:
-1. Call clear_whiteboard first.
-2. Call step_marker(step=1, x=40, y=50) for each step.
-3. Call draw_latex to write every equation and expression. This is mandatory.
-4. Call draw_text for labels and short explanations.
+1. Call clear_whiteboard() first to start fresh.
+2. Call step_marker(step=1, x=40, y=60) for each step heading.
+3. Call draw_latex() for every equation, expression, and math symbol. This is MANDATORY.
+4. Call draw_text() for labels, explanations, and commentary.
 5. Call draw_line / draw_arrow / draw_circle for diagrams.
-6. The whiteboard scrolls infinitely downward. Start y=60, increment by ~70px per step. There is no vertical limit — keep going as far as needed. Keep x between 40-700.
+6. The whiteboard scrolls infinitely downward. Start y=60, increment by ~70px per line. There is NO vertical limit. Keep x between 40-700.
 7. Speak naturally while calling tools — explain what you are writing.
 8. For long problems, keep going until fully solved. Do NOT stop early. Complete every step.
-9. When the student asks a NEW question, always call clear_whiteboard() first to start fresh.
+9. When the student asks a NEW question, always call clear_whiteboard() first.
 
-Example for "solve 2x + 3 = 7":
+EXAMPLE for "solve 2x + 3 = 7":
 - call clear_whiteboard()
 - call step_marker(step=1, x=40, y=50)
-- call draw_latex(latex="2x + 3 = 7", x=60, y=80)
-- call draw_text(text="Subtract 3 from both sides", x=60, y=130)
-- call step_marker(step=2, x=40, y=170)
-- call draw_latex(latex="2x = 4", x=60, y=200)
-- call step_marker(step=3, x=40, y=250)
-- call draw_latex(latex="x = 2", x=60, y=280, size=32)
+- call draw_text(text="Write the equation:", x=60, y=80)
+- call draw_latex(latex="2x + 3 = 7", x=60, y=120)
+- call draw_text(text="Subtract 3 from both sides", x=60, y=170)
+- call step_marker(step=2, x=40, y=210)
+- call draw_latex(latex="2x = 4", x=60, y=240)
+- call draw_text(text="Divide both sides by 2", x=60, y=290)
+- call step_marker(step=3, x=40, y=330)
+- call draw_latex(latex="x = 2", x=60, y=360, size=32)
 
-NEVER describe math verbally without also calling draw_latex or draw_text. The student's whiteboard is blank unless you call the tools."""
+REMEMBER: The student's whiteboard is BLANK unless you call the tools. You are a VISUAL teacher — always write on the board."""
 
 MODEL = "gemini-2.5-flash-native-audio-latest"
 
@@ -179,8 +184,14 @@ class GeminiSession:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print(f"Receive loop error: {e}")
-            await self.on_status({"error": str(e), "connected": False})
+            error_str = str(e)
+            print(f"Receive loop error: {error_str}")
+            # On "internal error" from Gemini, notify frontend but don't crash
+            if "internal" in error_str.lower():
+                print("[WARN] Gemini internal error — session may need reconnect")
+                await self.on_status({"error": "Gemini had an internal error. Please reconnect.", "connected": False})
+            else:
+                await self.on_status({"error": error_str, "connected": False})
 
     async def _handle_response(self, response):
         """Process a single response from Gemini."""
@@ -232,7 +243,7 @@ class GeminiSession:
                     types.FunctionResponse(
                         id=fc.id,
                         name=fc.name,
-                        response={"result": "ok", "scheduling": "WHEN_IDLE"},
+                        response={"status": "ok"},
                     )
                 )
 
