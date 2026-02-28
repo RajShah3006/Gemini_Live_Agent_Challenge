@@ -8,10 +8,16 @@
 
 - 🎙️ **Voice conversation** — Speak naturally with the AI tutor via Gemini Live API (real-time audio streaming)
 - 📷 **Image upload** — Drag-drop, paste, or browse photos of homework → AI recognizes and solves the problems
-- 📐 **AI-driven whiteboard** — Watch step-by-step solutions drawn live on a digital canvas with LaTeX math rendering
-- 🛑 **Barge-in support** — Interrupt the AI anytime ("wait, use the quadratic formula instead") and it adjusts
-- 🎯 **Student-guided solving** — You're in control: redirect the approach, ask for explanations, or add constraints
-- 🧮 **Algebra, Geometry, Calculus** — From basic equations to integrals and beyond
+- 📐 **AI-driven whiteboard** — Watch step-by-step solutions drawn live on a digital canvas with human-readable math notation
+- 🎨 **Multi-color steps** — Each step gets a distinct neon color (cyan, purple, pink, amber, emerald, blue, orange)
+- 📈 **Graph plotting** — Tutor plots mathematical functions (sin, cos, polynomials, etc.) with animated curves and labeled axes
+- 📝 **Homework grading** — Upload a photo and the tutor grades your work with ✓/✗ marks and an overall score
+- 🔄 **Voice re-explain** — Say "explain step 2 again" and the tutor re-explains below without clearing the board
+- 📄 **PDF export** — Download your whiteboard as a PDF for studying later
+- 📚 **Session history** — Review past tutoring sessions stored in Cloud Firestore
+- 🛑 **Barge-in support** — Interrupt the AI anytime and it adjusts
+- 🔁 **Auto-reconnect** — Gracefully recovers from Gemini API errors with exponential backoff
+- 🦉 **Teacher mascot** — Animated owl professor with idle/talking/thinking/writing states
 
 ## 🏗️ Architecture
 
@@ -21,9 +27,9 @@ See [docs/architecture.md](docs/architecture.md) for the full Mermaid diagram.
 ┌─────────────────┐     WebSocket      ┌──────────────────┐     Live API     ┌─────────────────┐
 │  Next.js         │ ◄──────────────► │  FastAPI           │ ◄──────────────► │  Gemini 2.5      │
 │  • Canvas Board  │                   │  • Session Mgr     │                  │  Flash           │
-│  • Mic (16kHz)   │                   │  • Function Router  │                  │  • Audio I/O     │
-│  • Speaker (24k) │                   │  • WS Handler       │                  │  • Vision        │
-│  • Image Upload  │                   │                    │                  │  • Tool Calls    │
+│  • Mic (16kHz)   │                   │  • Firestore       │                  │  • Audio I/O     │
+│  • Speaker (24k) │                   │  • Cloud Storage   │                  │  • Vision        │
+│  • Image Upload  │                   │  • Cloud Logging   │                  │  • Tool Calls    │
 └─────────────────┘                   └────────┬───────────┘                  └─────────────────┘
                                                 │
                                     ┌───────────┴───────────┐
@@ -31,14 +37,17 @@ See [docs/architecture.md](docs/architecture.md) for the full Mermaid diagram.
                                     │   • Cloud Run (host)   │
                                     │   • Firestore (data)   │
                                     │   • Cloud Storage      │
+                                    │   • Secret Manager     │
+                                    │   • Cloud Logging      │
                                     └───────────────────────┘
 ```
 
 **How it works:**
 1. Student speaks → 16kHz PCM audio streams via WebSocket → Gemini Live API
-2. Gemini responds with audio (24kHz) + function calls (`draw_latex`, `draw_line`, etc.)
+2. Gemini responds with audio (24kHz) + function calls (`draw_latex`, `draw_graph`, etc.)
 3. Function calls become whiteboard commands rendered on the Canvas in real-time
 4. Student can interrupt anytime — Gemini handles barge-in natively
+5. Sessions, exports, and logs are persisted to Google Cloud services
 
 ## 🛠️ Tech Stack
 
@@ -46,9 +55,30 @@ See [docs/architecture.md](docs/architecture.md) for the full Mermaid diagram.
 |-------|-----------|
 | Frontend | Next.js 15, React, TailwindCSS, HTML5 Canvas, Web Audio API |
 | Backend | Python 3.12, FastAPI, WebSockets |
-| AI | Gemini 2.5 Flash via Live API, Google GenAI SDK, 9 whiteboard tool functions |
-| Cloud | Google Cloud Run, Firestore, Cloud Storage |
+| AI | Gemini 2.5 Flash Native Audio via Live API, Google GenAI SDK, 6 whiteboard tool functions |
+| Cloud | Cloud Run, Cloud Firestore, Cloud Storage, Secret Manager, Cloud Logging |
 | DevOps | Docker, automated deploy script (`deploy.sh`) |
+
+## 🔧 Whiteboard Tools (Function Calling)
+
+| Tool | Description |
+|------|-------------|
+| `clear_whiteboard` | Clear the board for a new problem |
+| `step_marker` | Place a numbered step heading |
+| `draw_text` | Write plain text labels |
+| `draw_latex` | Write math expressions (auto-converted to human-readable) |
+| `draw_line` | Draw lines, underlines, diagrams |
+| `draw_graph` | Plot a math function with axes and animated curve |
+
+## ☁️ Google Cloud Services
+
+| Service | Usage |
+|---------|-------|
+| **Cloud Run** | Hosts both frontend and backend containers |
+| **Cloud Firestore** | Persists tutoring session history and messages |
+| **Cloud Storage** | Stores whiteboard PDF/JSON exports with signed URLs |
+| **Secret Manager** | Securely loads API keys (falls back to `.env` for local dev) |
+| **Cloud Logging** | Structured logging for all backend services |
 
 ## 🚀 Getting Started
 
@@ -64,21 +94,28 @@ git clone https://github.com/your-username/Gemini_Live_Agent_Challenge.git
 cd Gemini_Live_Agent_Challenge
 ```
 
-### 2. Start the backend
+### 2. Start both services (recommended)
+```bash
+# Edit backend/.env with your GOOGLE_API_KEY and GCP_PROJECT_ID
+./run.sh
+```
+
+### 3. Or start manually
+
+**Backend:**
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
+# Edit .env and add your GOOGLE_API_KEY and GCP_PROJECT_ID
 uvicorn main:app --reload --port 8000
 ```
 
-### 3. Start the frontend
+**Frontend:**
 ```bash
 cd frontend
 npm install
-cp .env.local.example .env.local
 npm run dev
 ```
 
@@ -87,7 +124,7 @@ Go to [http://localhost:3000](http://localhost:3000), click **Start Session**, a
 
 ## ☁️ Deploy to Google Cloud
 
-### Automated (recommended)
+### Automated (recommended — earns bonus points!)
 ```bash
 # Set your API key first
 export GOOGLE_API_KEY="your-key-here"
@@ -113,35 +150,41 @@ gcloud run deploy mathboard-frontend --image gcr.io/PROJECT_ID/mathboard-fronten
 
 ```
 ├── backend/
-│   ├── main.py              # FastAPI app + WebSocket handler
-│   ├── config.py             # Environment configuration
-│   ├── Dockerfile            # Cloud Run container
+│   ├── main.py                     # FastAPI app + WebSocket + REST API
+│   ├── config.py                   # Config with Secret Manager integration
+│   ├── Dockerfile                  # Cloud Run container
 │   ├── requirements.txt
 │   ├── services/
-│   │   ├── gemini_service.py # Gemini Live API session + 9 whiteboard tools
-│   │   ├── whiteboard_service.py
-│   │   └── session_service.py
+│   │   ├── gemini_service.py       # Gemini Live API + 6 whiteboard tools
+│   │   ├── session_service.py      # Cloud Firestore session persistence
+│   │   └── whiteboard_service.py   # Cloud Storage exports + state tracking
 │   └── models/
-│       └── messages.py       # Pydantic message models
+│       └── messages.py             # Pydantic message models
 ├── frontend/
 │   ├── src/
-│   │   ├── app/page.tsx      # Main app page
+│   │   ├── app/page.tsx            # Main app layout
 │   │   ├── components/
-│   │   │   ├── whiteboard/Whiteboard.tsx  # Canvas renderer
-│   │   │   ├── voice/VoicePanel.tsx       # Voice + text controls
-│   │   │   └── upload/ImageUpload.tsx     # Drag-drop image upload
+│   │   │   ├── whiteboard/
+│   │   │   │   ├── Whiteboard.tsx  # Canvas renderer + graph plotting
+│   │   │   │   ├── WhiteboardToolbar.tsx
+│   │   │   │   ├── TeacherMascot.tsx
+│   │   │   │   └── WritingHand.tsx
+│   │   │   ├── voice/VoicePanel.tsx
+│   │   │   ├── upload/ImageUpload.tsx
+│   │   │   └── SessionHistory.tsx  # Firestore session browser
 │   │   ├── hooks/
-│   │   │   ├── useSession.ts     # WebSocket + orchestration
-│   │   │   ├── useMicrophone.ts  # 16kHz PCM mic capture
-│   │   │   └── useAudioPlayer.ts # 24kHz PCM audio playback
+│   │   │   ├── useSession.ts       # WebSocket orchestration
+│   │   │   ├── useMicrophone.ts    # 16kHz PCM mic capture
+│   │   │   └── useAudioPlayer.ts   # 24kHz PCM playback
 │   │   └── lib/
-│   │       ├── types.ts          # Shared types
-│   │       └── config.ts         # API URLs
+│   │       ├── types.ts
+│   │       └── config.ts
 │   ├── Dockerfile
 │   └── next.config.ts
 ├── docs/
-│   └── architecture.md       # Mermaid architecture diagram
-├── deploy.sh                 # Automated Cloud Run deployment
+│   └── architecture.md             # Mermaid architecture diagram
+├── deploy.sh                       # Automated Cloud Run deployment
+├── run.sh                          # Local dev launcher
 └── README.md
 ```
 

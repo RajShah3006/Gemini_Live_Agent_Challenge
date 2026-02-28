@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import logging
 import uuid
 from typing import AsyncGenerator, Callable, Awaitable
 
@@ -10,6 +11,8 @@ from google import genai
 from google.genai import types
 
 import config as cfg
+
+logger = logging.getLogger("mathboard.gemini")
 
 # ── Tool declarations using SDK types ──
 
@@ -151,7 +154,7 @@ class GeminiSession:
 
     async def _reconnect(self):
         """Attempt to reconnect after an internal error."""
-        print("[RECONNECT] Cleaning up old session...")
+        logger.info(" Cleaning up old session...")
         try:
             if self._session and self._ctx:
                 await self._ctx.__aexit__(None, None, None)
@@ -162,16 +165,16 @@ class GeminiSession:
 
         for attempt in range(3):
             wait = 1.5 * (attempt + 1)
-            print(f"[RECONNECT] Attempt {attempt + 1}/3 in {wait}s...")
+            logger.info(f" Attempt {attempt + 1}/3 in {wait}s...")
             await asyncio.sleep(wait)
             try:
                 await self.connect()
-                print("[RECONNECT] Success!")
+                logger.info(" Success!")
                 await self.on_status({"connected": True, "reconnected": True})
                 return True
             except Exception as e:
-                print(f"[RECONNECT] Attempt {attempt + 1} failed: {e}")
-        print("[RECONNECT] All attempts failed")
+                logger.info(f" Attempt {attempt + 1} failed: {e}")
+        logger.info(" All attempts failed")
         return False
 
     async def _receive_loop(self):
@@ -183,14 +186,14 @@ class GeminiSession:
                     try:
                         await self._handle_response(response)
                     except Exception as e:
-                        print(f"[ERROR] handling response: {e}")
+                        logger.error(f" handling response: {e}")
         except asyncio.CancelledError:
             pass
         except Exception as e:
             error_str = str(e)
-            print(f"Receive loop error: {error_str}")
+            logger.error(f"Receive loop error: {error_str}")
             if "internal" in error_str.lower():
-                print("[WARN] Gemini internal error — attempting auto-reconnect...")
+                logger.warning(" Gemini internal error — attempting auto-reconnect...")
                 await self.on_status({"error": "Gemini internal error — reconnecting...", "reconnecting": True})
                 if await self._reconnect():
                     return  # reconnect starts a new receive loop via connect()
@@ -214,7 +217,7 @@ class GeminiSession:
             if hasattr(sc, 'turn_complete') and sc.turn_complete:
                 attrs.append("turn_complete")
         if attrs:
-            print(f"[RESP] {', '.join(attrs)}")
+            logger.debug(f" {', '.join(attrs)}")
 
         # Handle audio output
         if response.data is not None:
@@ -223,12 +226,12 @@ class GeminiSession:
 
         # Handle tool calls (whiteboard commands)
         if response.tool_call:
-            print(f"[TOOL CALL] {len(response.tool_call.function_calls)} function(s)")
+            logger.info(f" {len(response.tool_call.function_calls)} function(s)")
             function_responses = []
             for fc in response.tool_call.function_calls:
                 action = fc.name
                 params = dict(fc.args) if fc.args else {}
-                print(f"  → {action}({params})")
+                logger.info(f"  → {action}({params})")
 
                 if action == "clear_whiteboard":
                     action = "clear"
@@ -267,7 +270,7 @@ class GeminiSession:
             if response.server_content.model_turn:
                 for part in response.server_content.model_turn.parts:
                     if hasattr(part, 'text') and part.text:
-                        print(f"[TRANSCRIPT] tutor: {part.text[:80]}...")
+                        logger.debug(f" tutor: {part.text[:80]}...")
 
     async def send_audio(self, audio_data: bytes):
         """Send audio chunk from user's microphone."""

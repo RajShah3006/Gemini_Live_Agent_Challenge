@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Whiteboard } from "@/components/whiteboard/Whiteboard";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { ImageUpload } from "@/components/upload/ImageUpload";
+import { SessionHistory } from "@/components/SessionHistory";
 import { useSession } from "@/hooks/useSession";
 
 export default function Home() {
@@ -23,6 +24,7 @@ export default function Home() {
   } = useSession();
 
   const [showUpload, setShowUpload] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll transcript
@@ -52,6 +54,14 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowHistory(true)}
+            className="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-white/5"
+            style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+            title="Session History"
+          >
+            📚 History
+          </button>
           <span
             className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium"
             style={{
@@ -175,6 +185,9 @@ export default function Home() {
           onStopTalking={stopTalking}
         />
       </div>
+
+      {/* Session History Panel */}
+      <SessionHistory open={showHistory} onClose={() => setShowHistory(false)} />
     </main>
   );
 }

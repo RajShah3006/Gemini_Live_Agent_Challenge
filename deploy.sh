@@ -23,7 +23,7 @@ gcloud run deploy "$BACKEND_SERVICE" \
   --platform managed \
   --region "$REGION" \
   --allow-unauthenticated \
-  --set-env-vars "GOOGLE_API_KEY=\$GOOGLE_API_KEY,GCP_PROJECT_ID=$PROJECT_ID" \
+  --set-env-vars "GOOGLE_API_KEY=\$GOOGLE_API_KEY,GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=${PROJECT_ID}-mathboard" \
   --project "$PROJECT_ID"
 
 BACKEND_URL=$(gcloud run services describe "$BACKEND_SERVICE" --region "$REGION" --project "$PROJECT_ID" --format 'value(status.url)')
