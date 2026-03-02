@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,7 @@ app = FastAPI(title="MathBoard Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,7 +131,8 @@ async def websocket_session(ws: WebSocket):
     )
 
     try:
-        await session.connect()
+        # Don't connect to Gemini here — it connects lazily on first user input.
+        # This avoids the native audio model dropping idle connections (1011 error).
         await ws.send_json({"type": "status", "payload": {"connected": True, "session_id": session_id}})
 
         while True:
@@ -139,7 +141,11 @@ async def websocket_session(ws: WebSocket):
             payload = data.get("payload", {})
 
             if msg_type == "audio":
-                audio_bytes = base64.b64decode(payload.get("data", ""))
+                try:
+                    audio_bytes = base64.b64decode(payload.get("data", ""))
+                except Exception:
+                    logger.warning("Malformed audio base64 — skipping")
+                    continue
                 await session.send_audio(audio_bytes)
 
             elif msg_type == "text":
@@ -150,8 +156,8 @@ async def websocket_session(ws: WebSocket):
                     if session_id:
                         try:
                             await session_svc.save_message(session_id, "user", text)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Firestore save failed: {e}")
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
@@ -160,14 +166,14 @@ async def websocket_session(ws: WebSocket):
                     if session_id:
                         try:
                             await session_svc.save_message(session_id, "user", "[image uploaded]")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Firestore save failed: {e}")
 
             elif msg_type == "control":
                 action = payload.get("action", "")
                 if action == "clear":
                     await on_whiteboard({
-                        "id": "clear",
+                        "id": "user-clear",
                         "action": "clear",
                         "params": {},
                     })
@@ -181,6 +187,6 @@ async def websocket_session(ws: WebSocket):
         if session_id:
             try:
                 await session_svc.end_session(session_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Firestore end-session failed: {e}")
             whiteboard_svc.clear_session(session_id)

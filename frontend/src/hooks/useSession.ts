@@ -10,12 +10,40 @@ import type {
 import { useMicrophone } from "./useMicrophone";
 import { useAudioPlayer } from "./useAudioPlayer";
 
+// Pre-compiled typo corrections (avoids creating 30+ regex per keystroke)
+const TYPO_RULES: Array<[RegExp, string]> = Object.entries({
+  deravitive: "derivative", derivitive: "derivative", dervative: "derivative",
+  intergral: "integral", intergrate: "integrate", integerate: "integrate",
+  multipley: "multiply", multipication: "multiplication",
+  equasion: "equation", equaton: "equation",
+  algebera: "algebra", algebre: "algebra",
+  trigonmetry: "trigonometry", trignometry: "trigonometry",
+  calclus: "calculus", calculis: "calculus",
+  coefficent: "coefficient", coefficeint: "coefficient",
+  asymtote: "asymptote",
+  logarithim: "logarithm", logrithm: "logarithm",
+  polinomial: "polynomial", polynominal: "polynomial",
+  factorise: "factorize", simplfy: "simplify",
+  whats: "what's", hows: "how's", thats: "that's",
+}).map(([wrong, right]) => [new RegExp(`\\b${wrong}\\b`, "gi"), right]);
+
+function normalizeInput(text: string): string {
+  let result = text;
+  for (const [re, replacement] of TYPO_RULES) result = result.replace(re, replacement);
+  return result;
+}
+
 export function useSession() {
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intentionalDisconnectRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "connected" | "reconnecting" | "failed">("idle");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [whiteboardCommands, setWhiteboardCommands] = useState<
     WhiteboardCommand[]
   >([]);
@@ -87,6 +115,10 @@ export function useSession() {
             if (msg.payload.turn_complete) {
               setIsThinking(false);
             }
+            if (msg.payload.error) {
+              setErrorMessage(msg.payload.error as string);
+              setTimeout(() => setErrorMessage(null), 6000);
+            }
             break;
           case "audio":
             setIsThinking(false);
@@ -96,6 +128,8 @@ export function useSession() {
             break;
           case "error":
             console.error("Server error:", msg.payload);
+            setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
+            setTimeout(() => setErrorMessage(null), 6000);
             break;
         }
       } catch {
@@ -107,29 +141,54 @@ export function useSession() {
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    intentionalDisconnectRef.current = false;
+    // Clear any pending reconnect timer to prevent duplicate connections
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
 
-    const ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      setIsConnected(true);
-      startMic();
+    const attemptConnect = () => {
+      const ws = new WebSocket(WS_URL);
+      ws.onopen = () => {
+        setIsConnected(true);
+        setConnectionStatus("connected");
+        reconnectAttemptRef.current = 0;
+        startMic();
+      };
+      ws.onclose = () => {
+        setIsConnected(false);
+        setIsListening(false);
+        setIsSpeaking(false);
+        stopMic();
+        stopAudio();
+        // Auto-reconnect with exponential backoff (unless intentional disconnect)
+        if (!intentionalDisconnectRef.current && reconnectAttemptRef.current < 5) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 16000);
+          reconnectAttemptRef.current += 1;
+          setConnectionStatus("reconnecting");
+          reconnectTimerRef.current = setTimeout(attemptConnect, delay);
+        } else if (reconnectAttemptRef.current >= 5) {
+          setConnectionStatus("failed");
+        }
+      };
+      ws.onmessage = handleMessage;
+      ws.onerror = () => ws.close();
+      wsRef.current = ws;
     };
-    ws.onclose = () => {
-      setIsConnected(false);
-      setIsListening(false);
-      setIsSpeaking(false);
-      stopMic();
-      stopAudio();
-    };
-    ws.onmessage = handleMessage;
-    ws.onerror = () => ws.close();
-    wsRef.current = ws;
+
+    attemptConnect();
   }, [handleMessage, startMic, stopMic, stopAudio]);
 
   const disconnect = useCallback(() => {
+    intentionalDisconnectRef.current = true;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectAttemptRef.current = 0;
     stopMic();
     stopAudio();
     wsRef.current?.close();
     wsRef.current = null;
+    setConnectionStatus("idle");
   }, [stopMic, stopAudio]);
 
   // Push-to-talk: hold Space to talk
@@ -189,8 +248,18 @@ export function useSession() {
 
   const sendText = useCallback(
     (text: string) => {
-      send("text", { text });
-      addTranscript("user", text);
+      const cleaned = normalizeInput(text);
+      // Show the user's question on the whiteboard before Gemini responds
+      setWhiteboardCommands((prev) => [
+        ...prev,
+        {
+          id: `qh-${Date.now()}`,
+          action: "question_header",
+          params: { text: cleaned },
+        },
+      ]);
+      send("text", { text: cleaned });
+      addTranscript("user", cleaned);
       setIsThinking(true);
     },
     [send, addTranscript],
@@ -208,6 +277,8 @@ export function useSession() {
     isListening,
     isSpeaking,
     isThinking,
+    connectionStatus,
+    errorMessage,
     connect,
     disconnect,
     sendImage,

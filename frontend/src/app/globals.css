@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Kalam:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Single+Day&display=swap');
 @import "tailwindcss";
 
 :root {
@@ -37,10 +37,28 @@ body {
 ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.3); }
 
+/* Hidden scrollbar utility */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
 /* ── Animations ── */
 @keyframes mascotFloat {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-6px); }
+}
+
+/* Smooth expand/collapse for question cards */
+.q-expand-enter {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.2s ease;
+}
+.q-expand-active {
+  max-height: 300px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.2s ease;
 }
 
 @keyframes wingWave {
@@ -59,13 +77,13 @@ body {
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 8px var(--accent-glow); }
-  50% { box-shadow: 0 0 20px rgba(99,102,241,0.4), 0 0 40px rgba(99,102,241,0.15); }
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
 }
 
 @keyframes talkRing {
   0% { transform: scale(1); opacity: 0.6; }
-  100% { transform: scale(1.12); opacity: 0; }
+  100% { transform: scale(1.15); opacity: 0; }
 }
 
 @keyframes slideUp {

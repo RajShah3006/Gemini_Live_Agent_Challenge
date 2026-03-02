@@ -1,11 +1,17 @@
-"""Gemini Live API service — real-time audio/text/vision with function calling."""
+"""Gemini dual-model service — voice via Live API, text/image via standard API.
+
+Architecture:
+  • Audio model  (Live API, native-audio) → voice conversation + whiteboard tools
+  • Whiteboard model (standard generate_content API, Flash) → text/image → whiteboard tools
+  Text/image never touch the Live API, so 1011 "internal error" is impossible for them.
+"""
 
 import asyncio
 import base64
 import json
 import logging
 import uuid
-from typing import AsyncGenerator, Callable, Awaitable
+from typing import Callable, Awaitable
 
 from google import genai
 from google.genai import types
@@ -14,7 +20,32 @@ import config as cfg
 
 logger = logging.getLogger("mathboard.gemini")
 
-# ── Tool declarations using SDK types ──
+# Suppress noisy SDK warnings
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+
+# ── LaTeX escape fix ──
+# JSON interprets \f \t \n \r \b as control chars, clobbering LaTeX backslashes.
+# E.g. \frac → form-feed + "rac", \times → tab + "imes".
+# This helper restores the backslash in all string params.
+
+def _fix_latex_escapes(params: dict) -> dict:
+    """Re-escape control characters produced by JSON-parsing LaTeX backslash commands."""
+    _CTRL = {
+        '\f': '\\f',   # form-feed  → \f  (fixes \frac, \forall)
+        '\t': '\\t',   # tab        → \t  (fixes \times, \theta, \tan, \text, \to)
+        '\b': '\\b',   # backspace  → \b  (fixes \beta, \boxed)
+        '\r': '\\r',   # CR         → \r  (fixes \rightarrow, \Rightarrow)
+        '\n': '\\n',   # newline    → \n  (fixes \neq, \nabla, \notin)
+    }
+    result = {}
+    for k, v in params.items():
+        if isinstance(v, str):
+            for char, esc in _CTRL.items():
+                v = v.replace(char, esc)
+        result[k] = v
+    return result
+
+# ── Tool declarations (shared by both models) ──
 
 def _schema(props: dict, required: list[str] | None = None) -> types.Schema:
     return types.Schema(
@@ -23,13 +54,7 @@ def _schema(props: dict, required: list[str] | None = None) -> types.Schema:
         required=required or [],
     )
 
-# Keep tools minimal — native audio models crash with too many tool declarations
 WHITEBOARD_DECLS = [
-    types.FunctionDeclaration(
-        name="clear_whiteboard",
-        description="Clear the entire whiteboard before starting a new problem",
-        parameters=_schema({}),
-    ),
     types.FunctionDeclaration(
         name="step_marker",
         description="Place a step number label (e.g. Step 1, Step 2) on the whiteboard",
@@ -68,6 +93,15 @@ WHITEBOARD_DECLS = [
         }, ["x1", "y1", "x2", "y2"]),
     ),
     types.FunctionDeclaration(
+        name="draw_circle",
+        description="Draw a circle to highlight or circle an important answer, final result, or key term",
+        parameters=_schema({
+            "x": {"type": "NUMBER", "description": "Center X"},
+            "y": {"type": "NUMBER", "description": "Center Y"},
+            "radius": {"type": "NUMBER", "description": "Radius in px (default 30)"},
+        }, ["x", "y"]),
+    ),
+    types.FunctionDeclaration(
         name="draw_graph",
         description="Plot a math function graph with labeled axes. Use for graphing equations like y=x², y=sin(x), etc.",
         parameters=_schema({
@@ -87,42 +121,54 @@ WHITEBOARD_DECLS = [
 
 WHITEBOARD_TOOLS = [types.Tool(function_declarations=WHITEBOARD_DECLS)]
 
-SYSTEM_INSTRUCTION = """You are MathBoard, a math tutor who can teach ANY level. You have a whiteboard.
+# System prompt for Live API (voice — paces tool calls with speech)
+AUDIO_SYSTEM_INSTRUCTION = """You are MathBoard, a math tutor. You have a whiteboard.
 
-RULES — follow strictly:
-1. Call tools IMMEDIATELY. Do not think silently — start drawing right away.
-2. clear_whiteboard() first for every new question.
-3. step_marker() for each step heading.
-4. draw_latex() for ALL math — write it how a human writes on a blackboard, e.g. "x² + 3x - 5 = 0" not complicated LaTeX. Keep it simple and readable.
-5. draw_text() for SHORT labels only (under 25 chars).
-6. y starts at 60, increment ~70px. x between 40-700. Solve COMPLETELY.
-7. Pace tool calls with your speech. One idea at a time.
+RULES:
+1. Call tools IMMEDIATELY — start drawing right away.
+2. NEVER call clear_whiteboard(). The board preserves all work.
+3. step_marker() for each step heading. Always start with Step 1 for each new question.
+4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
+5. draw_text() for short labels only (under 25 chars). Keep annotations as part of the step_marker label, NOT as separate floating text.
+6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200 — no side annotations.
+7. Pace tool calls with your speech — one idea at a time.
+8. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+9. Use symbolic notation on the board, not prose: write "x → ∞" not "as x approaches infinity". Keep board content mathematical.
+10. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
 
-GRAPHING — when the student asks to graph a function:
-1. Use draw_graph() with the math expression. Use JS Math syntax: Math.sin(x), Math.pow(x,2), x*x, Math.exp(x), etc.
-2. Choose sensible x_min/x_max/y_min/y_max bounds for the function.
-3. Add a descriptive label like "y = sin(x)".
-4. You can graph BEFORE or AFTER step-by-step work. Place graph below any steps.
-
-HOMEWORK GRADING — when the student sends an image:
-1. Identify each problem in the image.
-2. Check their work step by step.
-3. For correct answers, write "✓ Correct!" with draw_text.
-4. For wrong answers, show the correct solution and explain the mistake.
-5. Give an overall score at the end (e.g. "Score: 4/5").
-
-RE-EXPLAINING — if the student says "explain step 2 again" or "I don't understand":
-1. Do NOT clear the whiteboard.
-2. Continue drawing BELOW the existing content (use higher y values).
-3. Re-explain that specific step in more detail with a different approach.
-
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
+HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
 START DRAWING IMMEDIATELY when asked a question."""
 
-MODEL = "gemini-2.5-flash-native-audio-latest"
+# System prompt for standard API (text/image — returns all tools at once)
+WB_SYSTEM_INSTRUCTION = """You are MathBoard, a math tutor. You have a whiteboard.
+
+RULES:
+1. Call tools IMMEDIATELY — draw the COMPLETE solution in one response.
+2. NEVER call clear_whiteboard(). The board preserves all work.
+3. step_marker() for each step heading. Always start with Step 1 for each new question.
+4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
+5. draw_text() for short labels only (under 25 chars). Keep annotations as part of the step_marker label, NOT as separate floating text.
+6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200 — no side annotations.
+7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+8. Return ALL tool calls needed for the complete solution.
+9. At the end, use draw_text() to add a brief reference like "Chain Rule" or "Integration by Parts" — name the theorem/technique used.
+10. Use symbolic notation on the board, not prose: write "x \\to \\infty" not "as x approaches infinity". Keep board content mathematical.
+11. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
+
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
+HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
+FOLLOW-UPS: If user says "[Q1]" or "[Q2]", they are asking about a previous question. Use context from your conversation history to answer.
+START DRAWING IMMEDIATELY when asked a question."""
+
+AUDIO_MODEL = "gemini-2.5-flash-native-audio-latest"
+WHITEBOARD_MODEL = "gemini-2.5-flash-lite"
 
 
 class GeminiSession:
-    """Manages a single Gemini Live API session with function calling."""
+    """Dual-model session: Live API for voice, standard API for text/image."""
 
     def __init__(self, on_audio: Callable[[bytes], Awaitable[None]],
                  on_whiteboard: Callable[[dict], Awaitable[None]],
@@ -132,53 +178,225 @@ class GeminiSession:
         self.on_whiteboard = on_whiteboard
         self.on_transcript = on_transcript
         self.on_status = on_status
+        self._client = genai.Client(api_key=cfg.GOOGLE_API_KEY)
+
+        # ── Live API state (voice) ──
         self._session = None
         self._ctx = None
-        self._client = genai.Client(api_key=cfg.GOOGLE_API_KEY)
         self._receive_task: asyncio.Task | None = None
+        self._connecting = False
+        self._speaking = False
+        self._audio_transcript_buf: list[str] = []  # capture voice model text
+
+        # ── Standard API state (text/image → whiteboard) ──
+        self._wb_history: list[types.Content] = []
+        self._wb_lock = asyncio.Lock()  # prevent concurrent whiteboard generation
+
+    # ═══════════════════════════════════════════════════════════
+    #  STANDARD API — text & image (zero connection issues)
+    # ═══════════════════════════════════════════════════════════
+
+    async def send_text(self, text: str):
+        """Text input → standard generate_content API. No WebSocket, no 1011."""
+        logger.info(f"[WB] Text question: {text[:80]}...")
+        await self._generate_whiteboard(text)
+
+    async def send_image(self, base64_data: str):
+        """Image input → standard generate_content API."""
+        if "," in base64_data:
+            base64_data = base64_data.split(",", 1)[1]
+        try:
+            image_bytes = base64.b64decode(base64_data)
+        except Exception:
+            logger.warning("Malformed image base64")
+            await self.on_status({"error": "Invalid image data"})
+            return
+        image_parts = [
+            types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_bytes)),
+        ]
+        logger.info("[WB] Image uploaded — analyzing via standard API")
+        await self._generate_whiteboard(
+            "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard.",
+            image_parts=image_parts,
+        )
+
+    async def _generate_whiteboard(self, text: str, image_parts: list | None = None):
+        """Generate whiteboard commands via standard generate_content API.
+
+        Multi-turn tool calling: model returns function calls → we respond → repeat
+        until the model finishes (returns text or no more function calls).
+        """
+        async with self._wb_lock:
+            # Build user message
+            parts: list[types.Part] = []
+            if image_parts:
+                parts.extend(image_parts)
+            parts.append(types.Part(text=text))
+
+            self._wb_history.append(types.Content(role="user", parts=parts))
+
+            # Trim history to last 30 items to stay within token limits
+            if len(self._wb_history) > 30:
+                self._wb_history = self._wb_history[-30:]
+
+            config = types.GenerateContentConfig(
+                tools=WHITEBOARD_TOOLS,
+                system_instruction=types.Content(
+                    parts=[types.Part(text=WB_SYSTEM_INSTRUCTION)]
+                ),
+            )
+
+            await self.on_status({"speaking": True})
+            total_cmds = 0
+
+            try:
+                # Standard API: model returns ALL tool calls in one response.
+                # We process them, send function responses, then get one final text reply.
+                # Max 2 rounds to avoid infinite tool-call loops.
+                for round_num in range(2):
+                    response = await self._client.aio.models.generate_content(
+                        model=WHITEBOARD_MODEL,
+                        contents=self._wb_history,
+                        config=config,
+                    )
+
+                    if not response.candidates:
+                        logger.warning("[WB] No candidates in response")
+                        await self.on_status({"error": "No response from AI — please try again."})
+                        break
+
+                    model_content = response.candidates[0].content
+                    self._wb_history.append(model_content)
+
+                    # Separate function calls from text
+                    function_calls = []
+                    text_parts = []
+                    for part in (model_content.parts or []):
+                        if part.function_call:
+                            function_calls.append(part)
+                        elif part.text:
+                            text_parts.append(part.text)
+
+                    # Forward whiteboard commands to frontend
+                    function_response_parts = []
+                    for part in function_calls:
+                        fc = part.function_call
+                        params = dict(fc.args) if fc.args else {}
+                        params = _fix_latex_escapes(params)
+                        logger.info(f"  WB → {fc.name}({params})")
+                        cmd = {
+                            "id": str(uuid.uuid4()),
+                            "action": fc.name,
+                            "params": params,
+                        }
+                        await self.on_whiteboard(cmd)
+                        total_cmds += 1
+                        function_response_parts.append(
+                            types.Part.from_function_response(
+                                name=fc.name,
+                                response={"status": "ok"},
+                            )
+                        )
+
+                    # Send text transcript if any
+                    if text_parts:
+                        full_text = " ".join(text_parts)
+                        logger.info(f"  WB transcript: {full_text[:100]}...")
+                        await self.on_transcript("tutor", full_text)
+
+                    # If no function calls, model is done
+                    if not function_calls:
+                        break
+
+                    # Send function responses — tell model drawing is complete
+                    self._wb_history.append(types.Content(
+                        role="user",
+                        parts=function_response_parts,
+                    ))
+                    logger.info(f"  WB round {round_num + 1}: {len(function_calls)} tool calls")
+
+                logger.info(f"[WB] Done — {total_cmds} total whiteboard commands")
+
+            except Exception as e:
+                logger.error(f"[WB] Generation error: {e}", exc_info=True)
+                await self.on_status({"error": f"Whiteboard error: {str(e)}"})
+            finally:
+                await self.on_status({"speaking": False, "turn_complete": True})
+
+    # ═══════════════════════════════════════════════════════════
+    #  LIVE API — voice / audio (native audio model)
+    # ═══════════════════════════════════════════════════════════
+
+    async def send_audio(self, audio_data: bytes):
+        """Audio input → Live API (native audio model)."""
+        await self.ensure_connected()
+        if self._session:
+            await self._session.send_realtime_input(
+                audio={"data": audio_data, "mime_type": "audio/pcm"}
+            )
+
+    async def ensure_connected(self):
+        """Lazily connect the Live API on first audio use."""
+        if self._session and not self._connecting:
+            return
+        if self._connecting:
+            for _ in range(100):  # up to 10s
+                await asyncio.sleep(0.1)
+                if self._session and not self._connecting:
+                    return
+            logger.info("Timed out waiting for Live API reconnect; forcing new connection")
+            self._connecting = False
+        logger.info("Opening new Live API session for voice...")
+        await self.connect()
 
     async def connect(self):
-        """Open a Gemini Live session."""
-        live_config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            system_instruction=types.Content(
-                parts=[types.Part(text=SYSTEM_INSTRUCTION)]
-            ),
-            tools=WHITEBOARD_TOOLS,
-        )
-        self._ctx = self._client.aio.live.connect(
-            model=MODEL, config=live_config
-        )
-        self._session = await self._ctx.__aenter__()
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        """Open a Gemini Live API session (voice)."""
+        self._connecting = True
+        try:
+            live_config = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                system_instruction=types.Content(
+                    parts=[types.Part(text=AUDIO_SYSTEM_INSTRUCTION)]
+                ),
+                tools=WHITEBOARD_TOOLS,
+            )
+            self._ctx = self._client.aio.live.connect(
+                model=AUDIO_MODEL, config=live_config
+            )
+            self._session = await self._ctx.__aenter__()
+            self._receive_task = asyncio.create_task(self._receive_loop())
+        finally:
+            self._connecting = False
 
     async def _reconnect(self):
-        """Attempt to reconnect after an internal error."""
-        logger.info(" Cleaning up old session...")
+        """Reconnect Live API after internal error (called from _receive_loop)."""
+        logger.info("Cleaning up old Live API session...")
         try:
+            self._receive_task = None  # don't cancel — we ARE the receive task
             if self._session and self._ctx:
                 await self._ctx.__aexit__(None, None, None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Cleanup during reconnect: {e}")
         self._session = None
         self._ctx = None
+        self._connecting = False
 
         for attempt in range(3):
-            wait = 1.5 * (attempt + 1)
-            logger.info(f" Attempt {attempt + 1}/3 in {wait}s...")
+            wait = 1.0 * (2 ** attempt)
+            logger.info(f"Live API reconnect {attempt + 1}/3 in {wait}s...")
             await asyncio.sleep(wait)
             try:
                 await self.connect()
-                logger.info(" Success!")
+                logger.info("Live API reconnected!")
                 await self.on_status({"connected": True, "reconnected": True})
                 return True
             except Exception as e:
-                logger.info(f" Attempt {attempt + 1} failed: {e}")
-        logger.info(" All attempts failed")
+                logger.info(f"Reconnect attempt {attempt + 1} failed: {e}")
+        logger.error("All Live API reconnect attempts failed")
         return False
 
     async def _receive_loop(self):
-        """Continuously receive responses from Gemini."""
+        """Receive responses from Live API."""
         try:
             while self._session:
                 turn = self._session.receive()
@@ -186,65 +404,49 @@ class GeminiSession:
                     try:
                         await self._handle_response(response)
                     except Exception as e:
-                        logger.error(f" handling response: {e}")
+                        logger.error(f"Live API response error: {e}")
         except asyncio.CancelledError:
             pass
         except Exception as e:
             error_str = str(e)
-            logger.error(f"Receive loop error: {error_str}")
-            if "internal" in error_str.lower():
-                logger.warning(" Gemini internal error — attempting auto-reconnect...")
-                await self.on_status({"error": "Gemini internal error — reconnecting...", "reconnecting": True})
+            # 1011 and 1008 are expected for native audio model — just reconnect quietly
+            if "1011" in error_str or "internal" in error_str.lower():
+                logger.info(f"Live API session ended (expected): {error_str[:80]}")
+                await self.on_status({"reconnecting": True})
                 if await self._reconnect():
-                    return  # reconnect starts a new receive loop via connect()
-            await self.on_status({"error": f"Session lost: {error_str}", "connected": False})
+                    return
+            elif "1008" in error_str or "policy" in error_str.lower():
+                logger.info(f"Live API policy error (expected): {error_str[:80]}")
+                await self.on_status({"reconnecting": True})
+                if await self._reconnect():
+                    return
+            else:
+                logger.error(f"Live API unexpected error: {error_str}")
+            await self.on_status({"error": f"Voice session lost: {error_str[:100]}", "connected": False})
 
     async def _handle_response(self, response):
-        """Process a single response from Gemini."""
-        # Debug: log every response
-        attrs = []
-        if response.data is not None:
-            attrs.append("data(audio)")
-        if response.tool_call:
-            attrs.append(f"tool_call({len(response.tool_call.function_calls)})")
-        if response.server_content:
-            sc = response.server_content
-            if hasattr(sc, 'model_turn') and sc.model_turn:
-                parts = [type(p).__name__ for p in (sc.model_turn.parts or [])]
-                attrs.append(f"model_turn({parts})")
-            if hasattr(sc, 'interrupted') and sc.interrupted:
-                attrs.append("interrupted")
-            if hasattr(sc, 'turn_complete') and sc.turn_complete:
-                attrs.append("turn_complete")
-        if attrs:
-            logger.debug(f" {', '.join(attrs)}")
-
+        """Process a single Live API response."""
         # Handle audio output
         if response.data is not None:
             await self.on_audio(response.data)
-            await self.on_status({"speaking": True})
+            if not self._speaking:
+                self._speaking = True
+                await self.on_status({"speaking": True})
 
-        # Handle tool calls (whiteboard commands)
+        # Handle tool calls (whiteboard commands from voice)
         if response.tool_call:
-            logger.info(f" {len(response.tool_call.function_calls)} function(s)")
+            logger.info(f"[Voice] {len(response.tool_call.function_calls)} tool call(s)")
             function_responses = []
             for fc in response.tool_call.function_calls:
-                action = fc.name
                 params = dict(fc.args) if fc.args else {}
-                logger.info(f"  → {action}({params})")
-
-                if action == "clear_whiteboard":
-                    action = "clear"
-                    params = {}
-
+                params = _fix_latex_escapes(params)
+                logger.info(f"  Voice → {fc.name}({params})")
                 cmd = {
                     "id": str(uuid.uuid4()),
-                    "action": action,
+                    "action": fc.name,
                     "params": params,
                 }
                 await self.on_whiteboard(cmd)
-
-                # Respond to Gemini that the function was executed
                 function_responses.append(
                     types.FunctionResponse(
                         id=fc.id,
@@ -252,67 +454,77 @@ class GeminiSession:
                         response={"status": "ok"},
                     )
                 )
-
             if function_responses:
                 await self._session.send_tool_response(
                     function_responses=function_responses
                 )
 
-        # Handle turn completion
+        # Handle turn completion and text
         if response.server_content:
             if hasattr(response.server_content, 'interrupted') and response.server_content.interrupted:
+                self._speaking = False
                 await self.on_status({"speaking": False, "interrupted": True})
 
-            if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
-                await self.on_status({"speaking": False, "turn_complete": True})
-
-            # Extract text transcript if present (log only, don't send to frontend)
+            # Capture text from voice model for context sync
             if response.server_content.model_turn:
                 for part in response.server_content.model_turn.parts:
                     if hasattr(part, 'text') and part.text:
-                        logger.debug(f" tutor: {part.text[:80]}...")
+                        self._audio_transcript_buf.append(part.text)
 
-    async def send_audio(self, audio_data: bytes):
-        """Send audio chunk from user's microphone."""
-        if self._session:
-            await self._session.send_realtime_input(
-                audio={"data": audio_data, "mime_type": "audio/pcm"}
-            )
+            if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
+                self._speaking = False
+                await self.on_status({"speaking": False, "turn_complete": True})
+                # Sync voice context to whiteboard history for follow-up questions
+                self._sync_voice_context()
+                # Proactive teardown — native audio model drops idle connections anyway
+                asyncio.create_task(self._teardown_session())
 
-    async def send_text(self, text: str):
-        """Send a text message (typed question or interruption)."""
-        if self._session:
-            await self._session.send_client_content(
-                turns={"parts": [{"text": text}]}
-            )
+    def _sync_voice_context(self):
+        """Add voice conversation context to whiteboard history so text follow-ups have context."""
+        if self._audio_transcript_buf:
+            transcript = " ".join(self._audio_transcript_buf)
+            self._audio_transcript_buf = []
+            # Add as a synthetic exchange so the whiteboard model knows what was discussed
+            self._wb_history.append(types.Content(
+                role="user",
+                parts=[types.Part(text="[Student asked a question via voice]")],
+            ))
+            self._wb_history.append(types.Content(
+                role="model",
+                parts=[types.Part(text=f"[Voice response summary]: {transcript[:500]}")],
+            ))
+            logger.info(f"[WB] Synced voice context ({len(transcript)} chars)")
 
-    async def send_image(self, base64_data: str):
-        """Send an uploaded image for Gemini to analyze."""
-        if self._session:
-            # Strip data URI prefix if present
-            if "," in base64_data:
-                base64_data = base64_data.split(",", 1)[1]
+    # ═══════════════════════════════════════════════════════════
+    #  Session lifecycle
+    # ═══════════════════════════════════════════════════════════
 
-            await self._session.send_client_content(
-                turns={
-                    "parts": [
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": base64_data,
-                            }
-                        },
-                        {"text": "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard."},
-                    ]
-                }
-            )
+    async def _teardown_session(self):
+        """Tear down Live API session after a voice turn."""
+        logger.debug("Tearing down Live API session post-turn")
+        try:
+            if self._receive_task:
+                self._receive_task.cancel()
+                self._receive_task = None
+            if self._session and self._ctx:
+                await self._ctx.__aexit__(None, None, None)
+        except Exception as e:
+            logger.debug(f"Teardown cleanup: {e}")
+        self._session = None
+        self._ctx = None
+        self._connecting = False
 
     async def close(self):
-        """Close the Gemini session."""
+        """Close all sessions."""
+        # Close Live API
         if self._receive_task:
             self._receive_task.cancel()
+            self._receive_task = None
         if self._session and self._ctx:
-            await self._ctx.__aexit__(None, None, None)
+            try:
+                await self._ctx.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"Close cleanup: {e}")
             self._session = None
             self._ctx = None
 

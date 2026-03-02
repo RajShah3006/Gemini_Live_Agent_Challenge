@@ -9,13 +9,25 @@ interface ImageUploadProps {
 
 export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
   const [preview, setPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+
   const processFile = useCallback(
     (file: File) => {
-      if (!file.type.startsWith("image/")) return;
+      setError(null);
+      if (!file.type.startsWith("image/")) {
+        setError("Please upload an image file (JPG, PNG, HEIC)");
+        return;
+      }
+      if (file.size > MAX_SIZE) {
+        setError(`Image too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.`);
+        return;
+      }
       const reader = new FileReader();
+      reader.onerror = () => setError("Failed to read file");
       reader.onload = (e) => {
         const result = e.target?.result as string;
         setPreview(result);
@@ -71,12 +83,18 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
             Drop an image, paste from clipboard, or click to browse
           </p>
           <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            JPG, PNG, HEIC supported
+            JPG, PNG, HEIC supported · Max 5MB
           </p>
+          {error && (
+            <p className="mt-2 text-xs font-medium" style={{ color: "var(--danger)" }}>
+              {error}
+            </p>
+          )}
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            capture="environment"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];

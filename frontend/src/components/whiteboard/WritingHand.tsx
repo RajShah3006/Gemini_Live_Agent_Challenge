@@ -12,15 +12,14 @@ interface WritingHandProps {
   glowColor?: string;
 }
 
-export function WritingHand({ x, y, show, glowColor = "#00e5ff" }: WritingHandProps) {
+export function WritingHand({ x, y, show, glowColor = "#94a3b8" }: WritingHandProps) {
   return (
     <div
       className="pointer-events-none absolute z-30 transition-opacity duration-200"
       style={{
-        left: x - 8,
-        top: y - 8,
-        opacity: show ? 1 : 0,
-        filter: `drop-shadow(0 0 8px ${glowColor}) drop-shadow(0 0 20px ${glowColor}40)`,
+        left: (Number.isFinite(x) ? x : 0) - 8,
+        top: (Number.isFinite(y) ? y : 0) - 8,
+        opacity: show ? 0.85 : 0,
         transform: "rotate(-30deg) translate(-20px, -40px)",
         willChange: "left, top, opacity",
       }}

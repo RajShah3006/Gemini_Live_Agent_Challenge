@@ -23,8 +23,11 @@ export interface WhiteboardCommand {
     | "draw_rect"
     | "draw_graph"
     | "highlight"
-    | "step_marker";
+    | "step_marker"
+    | "question_header";
   params: Record<string, unknown>;
+  _step?: number;
+  _sectionIdx?: number;
 }
 
 export interface TranscriptEntry {
