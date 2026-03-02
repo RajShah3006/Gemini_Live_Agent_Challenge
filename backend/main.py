@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import os
@@ -26,11 +27,14 @@ logger = logging.getLogger("mathboard")
 
 app = FastAPI(title="MathBoard Backend")
 
+_cors_raw = os.getenv("CORS_ORIGINS", "")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins or ["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -141,15 +145,19 @@ async def websocket_session(ws: WebSocket):
             payload = data.get("payload", {})
 
             if msg_type == "audio":
+                raw_b64 = payload.get("data", "")
+                if len(raw_b64) > 5_000_000:  # ~3.75 MB decoded
+                    logger.warning(f"Audio payload too large ({len(raw_b64)} bytes) — skipping")
+                    continue
                 try:
-                    audio_bytes = base64.b64decode(payload.get("data", ""))
-                except Exception:
-                    logger.warning("Malformed audio base64 — skipping")
+                    audio_bytes = base64.b64decode(raw_b64)
+                except (binascii.Error, ValueError) as e:
+                    logger.warning(f"Malformed audio base64 — skipping: {e}")
                     continue
                 await session.send_audio(audio_bytes)
 
             elif msg_type == "text":
-                text = payload.get("text", "")
+                text = (payload.get("text", "") or "")[:2000]  # cap at 2000 chars
                 if text:
                     await session.send_text(text)
                     # Save user message to Firestore
@@ -161,6 +169,10 @@ async def websocket_session(ws: WebSocket):
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
+                if len(image_data) > 10_000_000:  # ~7.5 MB decoded
+                    logger.warning("Image payload too large — skipping")
+                    await ws.send_json({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
+                    continue
                 if image_data:
                     await session.send_image(image_data)
                     if session_id:
@@ -181,7 +193,7 @@ async def websocket_session(ws: WebSocket):
     except WebSocketDisconnect:
         logger.info(f"Client disconnected: {session_id}")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
         await session.close()
         if session_id:

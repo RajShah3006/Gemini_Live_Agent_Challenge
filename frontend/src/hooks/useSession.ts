@@ -48,6 +48,7 @@ export function useSession() {
     WhiteboardCommand[]
   >([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
   const micActiveRef = useRef(false);
 
   const { playChunk, stop: stopAudio } = useAudioPlayer();
@@ -72,6 +73,22 @@ export function useSession() {
         ...prev,
         { role, text, timestamp: Date.now() },
       ]);
+      // Detect voice commands from user speech
+      if (role === "user") {
+        const t = text.toLowerCase().trim();
+        if (/\b(clear|erase)\s*(the\s*)?(board|whiteboard|canvas)\b/.test(t)) {
+          setVoiceCommand({ cmd: "clear" });
+        } else if (/\bzoom\s*in\b/.test(t)) {
+          setVoiceCommand({ cmd: "zoom_in" });
+        } else if (/\bzoom\s*out\b/.test(t)) {
+          setVoiceCommand({ cmd: "zoom_out" });
+        } else if (/\b(go\s*to|show|scroll\s*to)\s*q(?:uestion)?\s*(\d+)\b/.test(t)) {
+          const m = t.match(/\b(?:go\s*to|show|scroll\s*to)\s*q(?:uestion)?\s*(\d+)\b/);
+          if (m) setVoiceCommand({ cmd: "goto_q", arg: m[1] });
+        } else if (/\bundo\b/.test(t)) {
+          setVoiceCommand({ cmd: "undo" });
+        }
+      }
     },
     [],
   );
@@ -287,5 +304,6 @@ export function useSession() {
     stopTalking,
     whiteboardCommands,
     transcript,
+    voiceCommand,
   };
 }

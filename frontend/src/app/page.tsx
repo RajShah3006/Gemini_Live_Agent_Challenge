@@ -5,6 +5,8 @@ import { Whiteboard, type QuestionInfo } from "@/components/whiteboard/Whiteboar
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { ImageUpload } from "@/components/upload/ImageUpload";
 import { SessionHistory } from "@/components/SessionHistory";
+import { FormulaSheet } from "@/components/FormulaSheet";
+import { HandwritingCanvas } from "@/components/HandwritingCanvas";
 import { useSession } from "@/hooks/useSession";
 
 export default function Home() {
@@ -23,6 +25,7 @@ export default function Home() {
     stopTalking,
     whiteboardCommands,
     transcript,
+    voiceCommand,
   } = useSession();
 
   const [showUpload, setShowUpload] = useState(false);
@@ -44,6 +47,15 @@ export default function Home() {
       textInputRef.current.focus();
     }
   }, []);
+
+  const handleHandwritingSubmit = useCallback((blob: Blob) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = (reader.result as string).split(",")[1];
+      if (b64) sendImage(b64);
+    };
+    reader.readAsDataURL(blob);
+  }, [sendImage]);
 
   // Escape key closes panels
   useEffect(() => {
@@ -94,6 +106,13 @@ export default function Home() {
         <div ref={toolbarPortalRef} id="toolbar-portal" className="flex items-center gap-2" />
 
         <div className="flex items-center gap-2">
+          <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
+          <FormulaSheet onInsert={(formula) => {
+            if (textInputRef.current) {
+              textInputRef.current.value += formula;
+              textInputRef.current.focus();
+            }
+          }} />
           <button
             onClick={() => setShowHistory(true)}
             className="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-white/5"
@@ -158,6 +177,7 @@ export default function Home() {
             isThinking={isThinking}
             onQuestionsChange={handleQuestionsChange}
             toolbarPortalRef={toolbarPortalRef}
+            voiceCommand={voiceCommand}
           />
         </div>
 

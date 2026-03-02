@@ -16,6 +16,7 @@ const SHAPE_DURATION = 400;
 const BG = "#0b1120";
 const GRID = "rgba(255,255,255,0.025)";
 const FONT = "'Single Day', 'Segoe Script', cursive";
+const CONTENT_SIZE = 24;  // single font size for all board content
 // Clean marker palette — visible on dark bg, no neon
 const TEXT_COLOR = "#e2e8f0";      // white-ish for plain text
 const LINE_COLOR = "#94a3b8";      // soft gray for lines/dividers
@@ -189,6 +190,7 @@ interface WhiteboardProps {
   isThinking?: boolean;
   onQuestionsChange?: (questions: QuestionInfo[]) => void;
   toolbarPortalRef?: React.RefObject<HTMLDivElement | null>;
+  voiceCommand?: { cmd: string; arg?: string } | null;
 }
 
 /* ── Section = one response block on the board ── */
@@ -197,7 +199,8 @@ interface Section {
   label: string;         // "Q1", "Q2", "↪ follow-up"
   isNewQuestion: boolean; // true = show divider, false = just spacing
   yStart: number;        // absolute y where this section begins on the canvas
-  col: number;           // 0 = left column, 1 = right column
+  col: number;           // grid column index
+  row: number;           // grid row index
   xOffset: number;       // px to add to x coordinates for this column
   questionText?: string; // the user's original question text
 }
@@ -209,11 +212,9 @@ export interface QuestionInfo {
   yStart: number;
 }
 
-const SECTION_GAP = 80;        // px gap between questions (generous spacing)
-const DIVIDER_HEIGHT = 36;     // height of the section divider
 const FOLLOWUP_GAP = 14;       // tight gap between steps within a question
 
-export function Whiteboard({ commands, isSpeaking = false, isThinking = false, onQuestionsChange, toolbarPortalRef }: WhiteboardProps) {
+export function Whiteboard({ commands, isSpeaking = false, isThinking = false, onQuestionsChange, toolbarPortalRef, voiceCommand }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dprRef = useRef(1);
@@ -237,63 +238,61 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
   const sectionStartedRef = useRef(false); // did we start a section for this turn?
   const awaitingAnswerRef = useRef(false); // true after question_header, before Gemini response
 
-  // Column layout tracking (dynamic widths based on content)
-  const COL_GAP = 30;           // gap between columns
-  const COL_MIN_WIDTH = 280;    // minimum px per column
-  const colMaxYRef = useRef<number[]>([]);      // per-column max Y (height)
-  const colXStartRef = useRef<number[]>([0]);   // per-column absolute x start
-  const colContentWidthRef = useRef<number[]>([0]); // per-column measured content width
-  const currentColRef = useRef(0);              // current column index
-  const xOffsetRef = useRef(0);                 // current x offset for column
+  // ── Excel-style grid layout ──
+  // Each question (cell) has a row + column. Column widths and row heights are
+  // determined by the largest cell in that column/row respectively.
+  const CELL_PAD = 20;          // padding inside each cell
+  const CELL_GAP = 24;          // gap between cells
+  const CELL_MIN_W = 280;       // minimum cell width
+  // gridColWidths[c] = width of grid column c (widest cell content)
+  const gridColWidthsRef = useRef<number[]>([]);
+  // gridRowHeights[r] = height of grid row r (tallest cell content)
+  const gridRowHeightsRef = useRef<number[]>([]);
+  // Per-cell measured content dimensions (indexed by section idx)
+  const cellContentWRef = useRef<number[]>([]);   // per-section content width
+  const cellContentHRef = useRef<number[]>([]);   // per-section content height
+  const currentColRef = useRef(0);
+  const currentRowRef = useRef(0);
+  const xOffsetRef = useRef(0);
 
   // Derive mascot state
   const mascotState: MascotState = isDrawing ? "writing" : isSpeaking ? "talking" : isThinking ? "thinking" : "idle";
 
-  // Track the max y coordinate to grow the canvas
-  function trackY(y: number) {
-    const col = currentColRef.current;
-    if (col < colMaxYRef.current.length && y + 80 > colMaxYRef.current[col]) {
-      colMaxYRef.current[col] = y + 80;
+  /** Compute x offset for a grid column (sum of previous column widths + gaps) */
+  function gridColX(col: number): number {
+    let x = 0;
+    for (let c = 0; c < col; c++) {
+      x += (gridColWidthsRef.current[c] || CELL_MIN_W) + CELL_GAP;
     }
-    const globalMax = colMaxYRef.current.length > 0
-      ? Math.max(...colMaxYRef.current)
-      : y + 80;
-    if (globalMax > maxYRef.current) {
-      maxYRef.current = globalMax;
-      resizeCanvas();
-    }
+    return x;
   }
 
-  // Track the max x extent of content in the current column
-  function trackContentX(ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand) {
-    const col = currentColRef.current;
-    if (col >= colContentWidthRef.current.length) return;
-    const colStart = colXStartRef.current[col] || 0;
-    const maxX = measureCommandMaxX(ctx, cmd);
-    if (maxX <= 0) return;
-    const contentW = maxX - colStart + 30; // 30px right padding
-    if (contentW > colContentWidthRef.current[col]) {
-      colContentWidthRef.current[col] = Math.max(contentW, COL_MIN_WIDTH);
+  /** Compute y offset for a grid row (sum of previous row heights + gaps) */
+  function gridRowY(row: number): number {
+    let y = 0;
+    for (let r = 0; r < row; r++) {
+      y += (gridRowHeightsRef.current[r] || 0) + CELL_GAP;
     }
+    return y;
   }
 
-  /** Measure the furthest x-extent of a rendered command */
+  /** Measure the max x extent (absolute) of a rendered command */
   function measureCommandMaxX(ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand): number {
     const p = cmd.params;
     switch (cmd.action) {
       case "draw_text":
-        ctx.font = `${(p.size as number) || 24}px ${FONT}`;
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
         return (p.x as number) + ctx.measureText(latexToHuman((p.text as string) || "")).width;
       case "draw_latex":
-        ctx.font = `${(p.size as number) || 24}px ${FONT}`;
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
         return (p.x as number) + ctx.measureText(latexToHuman((p.latex as string) || "")).width;
       case "draw_graph":
         return (p.x as number) + ((p.width as number) || 500);
       case "draw_line":
         return Math.max((p.x1 as number) || 0, (p.x2 as number) || 0);
       case "step_marker": {
-        const sx = (p.x as number) || (colXStartRef.current[currentColRef.current] || 0) + 20;
-        ctx.font = `bold 22px ${FONT}`;
+        const sx = (p.x as number) || 20;
+        ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
         return sx + ctx.measureText(`Step ${p.step}`).width + 40;
       }
       case "draw_circle":
@@ -303,23 +302,47 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
     }
   }
 
-  /** Compute actual content width of a column by scanning all completed commands in it */
-  function computeColumnWidth(col: number): number {
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!ctx) return COL_MIN_WIDTH;
-    const colStart = colXStartRef.current[col] || 0;
-    let maxExtent = 0;
-    for (const c of completedRef.current) {
-      const secIdx = c._sectionIdx;
-      if (secIdx === undefined) continue;
-      const sec = sectionsRef.current[secIdx];
-      if (!sec || sec.col !== col) continue;
-      const ext = measureCommandMaxX(ctx, c);
-      if (ext > 0 && ext - colStart > maxExtent) {
-        maxExtent = ext - colStart;
+  /** Track a command's dimensions and update the grid column/row sizes */
+  function trackCellSize(ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand) {
+    const secIdx = cmd._sectionIdx;
+    if (secIdx === undefined) return;
+    const sec = sectionsRef.current[secIdx];
+    if (!sec) return;
+    const { col, row, xOffset } = sec;
+
+    // Track width
+    const maxX = measureCommandMaxX(ctx, cmd);
+    if (maxX > 0) {
+      const contentW = maxX - xOffset + CELL_PAD;
+      if (contentW > (cellContentWRef.current[secIdx] || 0)) {
+        cellContentWRef.current[secIdx] = contentW;
+        // Update grid column width if this cell is the widest
+        const colW = Math.max(contentW, CELL_MIN_W);
+        if (colW > (gridColWidthsRef.current[col] || 0)) {
+          gridColWidthsRef.current[col] = colW;
+        }
       }
     }
-    return Math.max(maxExtent + 30, COL_MIN_WIDTH);
+
+    // Track height
+    const cmdY = getCommandY(cmd);
+    if (cmdY > 0) {
+      const cellH = cmdY - sec.yStart + 40; // 40px bottom padding
+      if (cellH > (cellContentHRef.current[secIdx] || 0)) {
+        cellContentHRef.current[secIdx] = cellH;
+        // Update grid row height if this cell is the tallest
+        if (cellH > (gridRowHeightsRef.current[row] || 0)) {
+          gridRowHeightsRef.current[row] = cellH;
+        }
+      }
+    }
+
+    // Grow canvas if needed
+    const totalH = gridRowY(gridRowHeightsRef.current.length);
+    if (totalH > maxYRef.current) {
+      maxYRef.current = totalH;
+      resizeCanvas();
+    }
   }
 
   function resizeCanvas() {
@@ -328,7 +351,9 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
     if (!canvas || !container) return;
     const dpr = window.devicePixelRatio || 1;
     dprRef.current = dpr;
-    const w = container.clientWidth;
+    // Column layout uses the 100% zoom viewport (zoom=1 → scale 0.5 → 2× container width)
+    // so more columns fit. At 200% (default) the user scrolls; at 100% everything is visible.
+    const w = container.clientWidth * 2;
     viewWidthRef.current = w;
     const minH = container.clientHeight;
     const h = Math.max(minH, maxYRef.current);
@@ -340,151 +365,122 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     clearBoard(ctx, w, h);
-    // Draw chalk column dividers at dynamic positions
-    const numDynCols = colXStartRef.current.length;
-    if (numDynCols > 1) {
-      for (let c = 1; c < numDynCols; c++) {
-        const cx = colXStartRef.current[c] - COL_GAP / 2;
+    // Draw chalk column dividers at grid column boundaries
+    const numGridCols = gridColWidthsRef.current.length;
+    if (numGridCols > 1) {
+      for (let c = 1; c < numGridCols; c++) {
+        const cx = gridColX(c) - CELL_GAP / 2;
         drawWavyLine(ctx, cx, 20, cx, h - 20, "rgba(148,163,184,0.08)", 0.8);
       }
     }
-    // Redraw all section dividers (within their column)
-    sectionsRef.current.forEach(sec => {
-      if (sec.isNewQuestion && sec.idx > 0) drawSectionDivider(ctx, sec, w);
-    });
-    // Redraw all completed commands (update dynamic colWidth on headers first)
+    // Redraw all completed commands (update dynamic colWidth on headers)
     completedRef.current.forEach(c => {
       if (c.action === "question_header") {
         const sIdx = c._sectionIdx ?? 0;
         const secCol = sectionsRef.current[sIdx]?.col ?? 0;
-        c.params._colWidth = Math.max(colContentWidthRef.current[secCol] || COL_MIN_WIDTH, COL_MIN_WIDTH);
+        c.params._colWidth = Math.max(gridColWidthsRef.current[secCol] || CELL_MIN_W, CELL_MIN_W);
       }
       const step = c._step || 0;
       drawInstant(ctx, c, dpr, step);
     });
   }
 
-  /** Draw a column-scoped divider + label between question sections */
-  function drawSectionDivider(ctx: CanvasRenderingContext2D, sec: Section, _canvasW: number) {
-    const colWidth = colContentWidthRef.current[sec.col] || COL_MIN_WIDTH;
-    const y = sec.yStart + 14;
-    const leftX = sec.xOffset + 15;
-    const rightX = sec.xOffset + colWidth - 15;
-    const midX = sec.xOffset + colWidth / 2;
-
-    // Hand-drawn wavy divider line
-    drawWavyLine(ctx, leftX, y, rightX, y, "rgba(148,163,184,0.2)", 1);
-    // Label pill
-    const label = sec.label;
-    ctx.font = `bold 13px ${FONT}`;
-    const tw = ctx.measureText(label).width;
-    const px = midX - tw / 2 - 12;
-    ctx.fillStyle = "rgba(148,163,184,0.10)";
-    ctx.beginPath();
-    ctx.roundRect(px, y - 11, tw + 24, 22, 11);
-    ctx.fill();
-    markerText(ctx, label, midX - tw / 2, y + 4, "#94a3b8", 13, true);
-  }
-
   /**
-   * Start a new layout section with dynamic column widths.
-   * New questions go into a new column (sized by previous content) or the shortest existing column.
-   * Follow-ups stay in the same column.
+   * Start a new layout section using Excel-style grid placement.
+   * New questions fill left→right in the current row, wrapping to a new row when full.
+   * Follow-ups stay in the same cell (same row/col), extending vertically.
    */
   function startNewSection(isNewQuestion: boolean) {
     const sectionIdx = sectionsRef.current.length;
-    const existingCols = colXStartRef.current.length;
-
-    // Ensure colMaxYRef has enough entries
-    while (colMaxYRef.current.length < existingCols) {
-      colMaxYRef.current.push(0);
-    }
-    while (colContentWidthRef.current.length < existingCols) {
-      colContentWidthRef.current.push(0);
-    }
 
     let col: number;
+    let row: number;
     let xOffset: number;
     let yStart: number;
 
     if (isNewQuestion) {
       questionCountRef.current += 1;
 
-      // Check if we can create a new column to the right
-      // Recompute previous column's width from actual rendered content
-      const prevColWidth = computeColumnWidth(existingCols - 1);
-      colContentWidthRef.current[existingCols - 1] = prevColWidth;
-      const lastColEnd = colXStartRef.current[existingCols - 1] + prevColWidth;
-      const newColStart = lastColEnd + COL_GAP;
-      const hasRoom = newColStart + COL_MIN_WIDTH <= viewWidthRef.current;
-
-      // Find if any existing column is empty (height 0)
-      let emptyCol = -1;
-      for (let i = 0; i < existingCols; i++) {
-        if ((colMaxYRef.current[i] ?? 0) === 0) { emptyCol = i; break; }
-      }
-
-      if (emptyCol >= 0) {
-        // Reuse empty column
-        col = emptyCol;
-      } else if (hasRoom) {
-        // Create new column to the right, positioned after previous content
-        col = existingCols;
-        colXStartRef.current.push(newColStart);
-        colMaxYRef.current.push(0);
-        colContentWidthRef.current.push(0);
-      } else {
-        // No room — stack below the shortest existing column
+      if (sectionIdx === 0) {
+        // Very first question → row 0, col 0
+        row = 0;
         col = 0;
-        let minH = colMaxYRef.current[0] ?? 0;
-        for (let i = 1; i < existingCols; i++) {
-          const h = colMaxYRef.current[i] ?? 0;
-          if (h < minH) { minH = h; col = i; }
+        if (gridColWidthsRef.current.length === 0) gridColWidthsRef.current.push(CELL_MIN_W);
+        if (gridRowHeightsRef.current.length === 0) gridRowHeightsRef.current.push(0);
+      } else {
+        // Try next column in the current row
+        const nextCol = currentColRef.current + 1;
+        const nextColX = gridColX(nextCol);
+        const hasRoom = nextColX + CELL_MIN_W <= viewWidthRef.current;
+
+        if (hasRoom) {
+          row = currentRowRef.current;
+          col = nextCol;
+          while (gridColWidthsRef.current.length <= col) gridColWidthsRef.current.push(CELL_MIN_W);
+        } else {
+          // No room → wrap to new row, column 0
+          row = currentRowRef.current + 1;
+          col = 0;
+          while (gridRowHeightsRef.current.length <= row) gridRowHeightsRef.current.push(0);
         }
       }
 
-      xOffset = colXStartRef.current[col] || 0;
-      yStart = (colMaxYRef.current[col] ?? 0) > 0
-        ? (colMaxYRef.current[col] ?? 0) + SECTION_GAP
-        : 0;
+      xOffset = gridColX(col);
+      yStart = gridRowY(row);
     } else {
-      // Follow-up → same column as parent question
+      // Follow-up → same cell, extend below last content in that cell
       col = currentColRef.current;
-      xOffset = colXStartRef.current[col] || 0;
-      yStart = (colMaxYRef.current[col] ?? 0) + FOLLOWUP_GAP;
+      row = currentRowRef.current;
+      xOffset = gridColX(col);
+      // Find the last section in this cell (same col & row)
+      let lastCellH = 0;
+      for (let i = sectionIdx - 1; i >= 0; i--) {
+        const s = sectionsRef.current[i];
+        if (s.col === col && s.row === row) {
+          lastCellH = cellContentHRef.current[i] || 0;
+          break;
+        }
+      }
+      yStart = gridRowY(row) + lastCellH + FOLLOWUP_GAP;
     }
 
     currentColRef.current = col;
+    currentRowRef.current = row;
     xOffsetRef.current = xOffset;
 
     const label = isNewQuestion ? `Q${questionCountRef.current}` : `↪ Q${questionCountRef.current}`;
-    const section: Section = { idx: sectionIdx, label, isNewQuestion, yStart, col, xOffset };
+    const section: Section = { idx: sectionIdx, label, isNewQuestion, yStart, col, row, xOffset };
     sectionsRef.current.push(section);
     setSections([...sectionsRef.current]);
 
-    // Add divider height if this column already has content
-    const showDivider = isNewQuestion && sectionIdx > 0 && (colMaxYRef.current[col] ?? 0) > 0;
-    const divH = showDivider ? DIVIDER_HEIGHT : 0;
-    yOffsetRef.current = yStart + divH;
+    yOffsetRef.current = yStart;
     currentStepRef.current = 0;
     sectionStartedRef.current = true;
-
-    // Draw divider within the column
-    if (showDivider) {
-      trackY(yStart + divH);
-      const ctx = canvasRef.current?.getContext("2d");
-      if (ctx) drawSectionDivider(ctx, section, viewWidthRef.current);
-    }
+    // Initialize cell content tracking
+    while (cellContentWRef.current.length <= sectionIdx) cellContentWRef.current.push(0);
+    while (cellContentHRef.current.length <= sectionIdx) cellContentHRef.current.push(0);
   }
 
-  function autoScroll(y: number) {
+  function autoScroll(y: number, x?: number) {
     const container = containerRef.current;
     if (!container) return;
+    const scale = zoomRef.current / 2;
+    // Vertical
     const viewH = container.clientHeight;
-    const scaledY = y * (zoomRef.current / 2);
-    const targetScroll = scaledY - viewH + 120;
-    if (targetScroll > container.scrollTop) {
-      container.scrollTo({ top: targetScroll, behavior: "smooth" });
+    const scaledY = y * scale;
+    const targetTop = scaledY - viewH + 120;
+    // Horizontal
+    const viewW = container.clientWidth;
+    const scaledX = (x ?? 0) * scale;
+    const targetLeft = scaledX - viewW + 200;
+    const needsY = targetTop > container.scrollTop;
+    const needsX = x !== undefined && targetLeft > container.scrollLeft;
+    if (needsY || needsX) {
+      container.scrollTo({
+        top: needsY ? targetTop : container.scrollTop,
+        left: needsX ? targetLeft : container.scrollLeft,
+        behavior: "smooth",
+      });
     }
   }
 
@@ -521,11 +517,13 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
           turnCompleteRef.current = true;
           sectionStartedRef.current = false;
           awaitingAnswerRef.current = false;
-          colMaxYRef.current = [];
           currentColRef.current = 0;
+          currentRowRef.current = 0;
           xOffsetRef.current = 0;
-          colXStartRef.current = [0];
-          colContentWidthRef.current = [0];
+          gridColWidthsRef.current = [];
+          gridRowHeightsRef.current = [];
+          cellContentWRef.current = [];
+          cellContentHRef.current = [];
           resizeCanvas();
           if (containerRef.current) containerRef.current.scrollTop = 0;
         }
@@ -537,7 +535,46 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
       // ── Question header: show user's typed question on the board ──
       if (cmd.action === "question_header") {
         const rawText = (cmd.params.text as string) || "";
-        startNewSection(true);
+
+        // Detect follow-up: "[Q1] explain more" or short conversational queries
+        const qRef = rawText.match(/^\[Q(\d+)\]/i);
+        let isFollowUp = false;
+        let parentSection: Section | undefined;
+
+        if (qRef) {
+          // Explicit follow-up like "[Q1] explain more"
+          const refNum = parseInt(qRef[1], 10);
+          parentSection = sectionsRef.current.find(
+            s => s.isNewQuestion && s.label === `Q${refNum}`
+          );
+          if (parentSection) isFollowUp = true;
+        } else if (sectionsRef.current.length > 0) {
+          // Heuristic: short queries without math symbols are likely follow-ups
+          const trimmed = rawText.trim();
+          const looksLikeFollowUp =
+            trimmed.length < 60 &&
+            !/[0-9]{2,}|[+\-*/^=∫∑∏√]|\\frac|derivative|integral|solve|graph|plot/i.test(trimmed) &&
+            /^(why|how|what|explain|elaborate|more|detail|show|can you|could you|tell me|again|huh|isn.t|doesn.t|but|and|also|wait|so|really|isn.t that|what about|what if)/i.test(trimmed);
+          if (looksLikeFollowUp) {
+            // Follow up on the most recent question
+            for (let i = sectionsRef.current.length - 1; i >= 0; i--) {
+              if (sectionsRef.current[i].isNewQuestion) {
+                parentSection = sectionsRef.current[i];
+                isFollowUp = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (isFollowUp && parentSection) {
+          // Jump to the parent question's cell before creating follow-up section
+          currentColRef.current = parentSection.col;
+          currentRowRef.current = parentSection.row;
+          startNewSection(false);
+        } else {
+          startNewSection(true);
+        }
         turnCompleteRef.current = false;
         awaitingAnswerRef.current = true; // keep this section open for Gemini's answer
 
@@ -569,30 +606,39 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
         markerText(ctx, label, qX + 6, qY + 2, "#818cf8", 15);
 
         // Math expression after label
-        ctx.font = `24px ${FONT}`;
-        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, 24);
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
+        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, CONTENT_SIZE);
 
-        // Subtle underline across column width (use current content width or minimum)
-        const colWidth = Math.max(colContentWidthRef.current[section.col] || 0, COL_MIN_WIDTH);
+        // Subtle underline across column width
+        const colWidth = Math.max(gridColWidthsRef.current[section.col] || 0, CELL_MIN_W);
         ctx.beginPath();
         ctx.moveTo(qX, qY + 12);
         ctx.lineTo(qX + colWidth - 40, qY + 12);
         markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
 
-        // Track initial header content width
-        ctx.font = `24px ${FONT}`;
+        // Track initial header content width in grid
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
         const headerMaxX = qX + lw + 20 + ctx.measureText(qText).width;
-        const headerContentW = headerMaxX - (section.xOffset || 0) + 30;
-        if (headerContentW > (colContentWidthRef.current[section.col] || 0)) {
-          colContentWidthRef.current[section.col] = Math.max(headerContentW, COL_MIN_WIDTH);
+        const headerContentW = headerMaxX - (section.xOffset || 0) + CELL_PAD;
+        cellContentWRef.current[section.idx] = Math.max(headerContentW, CELL_MIN_W);
+        if (headerContentW > (gridColWidthsRef.current[section.col] || 0)) {
+          gridColWidthsRef.current[section.col] = Math.max(headerContentW, CELL_MIN_W);
         }
-        ctx.beginPath();
-        ctx.moveTo(qX, qY + 12);
-        ctx.lineTo(qX + colWidth - 40, qY + 12);
-        markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
 
-        trackY(qY + 20);
-        autoScroll(qY + 20);
+        // Track cell height
+        const headerH = 60;
+        cellContentHRef.current[section.idx] = headerH;
+        if (headerH > (gridRowHeightsRef.current[section.row] || 0)) {
+          gridRowHeightsRef.current[section.row] = headerH;
+        }
+
+        // Grow canvas if needed
+        const totalH = gridRowY(gridRowHeightsRef.current.length);
+        if (totalH > maxYRef.current) {
+          maxYRef.current = totalH;
+          resizeCanvas();
+        }
+        autoScroll(qY + 20, qX);
         yOffsetRef.current += 40; // push Gemini content below question header
 
         // Store with computed positions for redraw
@@ -636,6 +682,12 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
       offsetCmd._step = currentStepRef.current;
       offsetCmd._sectionIdx = sectionsRef.current.length - 1;
 
+      // Strip redundant "Step N:" prefix from draw_text (AI sometimes duplicates step_marker)
+      if (offsetCmd.action === "draw_text" && typeof offsetCmd.params.text === "string") {
+        offsetCmd.params.text = offsetCmd.params.text.replace(/^Step\s*\d+\s*[:.\-–—]\s*/i, "");
+        if (!offsetCmd.params.text) continue; // skip if nothing left after stripping
+      }
+
       // Dynamic circle→pill sizing: measure nearby text and auto-fit pill dimensions
       // ONLY search within the same section to avoid cross-column matches
       if (offsetCmd.action === "draw_circle") {
@@ -657,11 +709,10 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
           if (yDist > 80) continue;
           const raw = isLatex ? prev.params.latex : prev.params.text;
           const text = latexToHuman(raw as string);
-          const tSize = (prev.params.size as number) || 24;
-          ctx.font = `${tSize}px ${FONT}`;
+          ctx.font = `${CONTENT_SIZE}px ${FONT}`;
           const tw = ctx.measureText(text).width;
           const textCx = tX + tw / 2;
-          const textCy = tY - tSize * 0.3;
+          const textCy = tY - CONTENT_SIZE * 0.3;
           const dist = Math.hypot(rawCx - textCx, rawCy - textCy);
           // Prefer latex over text: never replace a latex match with text
           if (bestIsLatex && !isLatex) continue;
@@ -676,7 +727,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
             bestIsLatex = isLatex;
           }
           pillW = tw + 28;
-          pillH = tSize + 16;
+          pillH = CONTENT_SIZE + 16;
           // Re-center pill on the text
           offsetCmd.params.x = textCx;
           offsetCmd.params.y = textCy;
@@ -685,14 +736,11 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
         offsetCmd.params._pillH = pillH;
       }
 
-      // Grow canvas and auto-scroll
+      // Track cell dimensions and grow canvas
+      trackCellSize(ctx, offsetCmd);
       const cmdY = getCommandY(offsetCmd);
-      if (cmdY > 0) {
-        trackY(cmdY);
-        autoScroll(cmdY);
-      }
-      // Track content width for dynamic column sizing
-      trackContentX(ctx, offsetCmd);
+      const cmdX = (offsetCmd.params.x as number) ?? (offsetCmd.params.x1 as number) ?? 0;
+      if (cmdY > 0) autoScroll(cmdY, cmdX);
       await animateCmd(ctx, offsetCmd, dprRef.current, setCursor, currentStepRef.current);
       completedRef.current.push(offsetCmd);
       if (queueRef.current.length > 0) {
@@ -748,11 +796,13 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
     turnCompleteRef.current = true;
     sectionStartedRef.current = false;
     awaitingAnswerRef.current = false;
-    colMaxYRef.current = [];
     currentColRef.current = 0;
+    currentRowRef.current = 0;
     xOffsetRef.current = 0;
-    colXStartRef.current = [0];
-    colContentWidthRef.current = [0];
+    gridColWidthsRef.current = [];
+    gridRowHeightsRef.current = [];
+    cellContentWRef.current = [];
+    cellContentHRef.current = [];
     resizeCanvas();
     if (containerRef.current) containerRef.current.scrollTop = 0;
   }
@@ -777,6 +827,41 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
     return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Voice command handler ──
+  useEffect(() => {
+    if (!voiceCommand) return;
+    const { cmd, arg } = voiceCommand;
+    switch (cmd) {
+      case "clear":
+        handleClear();
+        break;
+      case "zoom_in":
+        setZoom(prev => Math.min(3, prev + 0.25));
+        break;
+      case "zoom_out":
+        setZoom(prev => Math.max(0.25, prev - 0.25));
+        break;
+      case "goto_q": {
+        const qNum = parseInt(arg || "1", 10);
+        const sec = sectionsRef.current.find(
+          s => s.isNewQuestion && s.label === `Q${qNum}`
+        );
+        if (sec && containerRef.current) {
+          const scale = zoomRef.current / 2;
+          containerRef.current.scrollTo({
+            top: sec.yStart * scale - 40,
+            left: sec.xOffset * scale,
+            behavior: "smooth",
+          });
+        }
+        break;
+      }
+      case "undo":
+        // Remove last command
+        break;
+    }
+  }, [voiceCommand]);
 
   // Ctrl+wheel zoom (non-passive so we can preventDefault)
   const zoomRef = useRef(zoom);
@@ -961,9 +1046,23 @@ function getCommandY(cmd: WhiteboardCommand): number {
 
 /* ═══ Safe math evaluator for graph plotting ═══ */
 
+// Whitelist of allowed tokens in math expressions
+const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t\n\r]*$/;
+const SAFE_FUNCS = [
+  "Math.sin","Math.cos","Math.tan","Math.abs","Math.sqrt","Math.log","Math.log2","Math.log10",
+  "Math.exp","Math.pow","Math.floor","Math.ceil","Math.round","Math.min","Math.max",
+  "Math.PI","Math.E","Math.asin","Math.acos","Math.atan","Math.atan2",
+  "Math.sinh","Math.cosh","Math.tanh","Math.sign","Math.cbrt","Math.hypot",
+];
+
 function evalMathFn(expr: string, x: number): number {
   try {
-    const fn = new Function("x", "Math", `return (${expr});`);
+    // Strip all allowed Math.xxx calls, then verify only safe chars remain
+    let stripped = expr;
+    for (const fn of SAFE_FUNCS) stripped = stripped.replaceAll(fn, "");
+    if (!SAFE_MATH_RE.test(stripped)) return NaN;
+
+    const fn = new Function("x", "Math", `"use strict"; return (${expr});`);
     const result = fn(x, Math);
     return typeof result === "number" && isFinite(result) ? result : NaN;
   } catch {
@@ -1178,7 +1277,7 @@ function animateCmd(
         // Always sanitize — Gemini sometimes sends LaTeX even via draw_text
         const text = latexToHuman(raw);
         const x = p.x as number, y = p.y as number;
-        const size = (p.size as number) || 24;
+        const size = CONTENT_SIZE;
         const color = isLatex ? sc : TEXT_COLOR;
         ctx.font = `${size}px ${FONT}`;
         let i = 0;
@@ -1305,12 +1404,12 @@ function animateCmd(
       case "step_marker": {
         const sx = p.x as number, sy = p.y as number;
         const label = `Step ${p.step as number}`;
-        ctx.font = `bold 22px ${FONT}`;
+        ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
         let i = 0;
         const tick = () => {
           if (i >= label.length) { resolve(); return; }
           const xOff = ctx.measureText(label.slice(0, i)).width;
-          markerText(ctx, label[i], sx + xOff, sy, STEP_LABEL_COLOR, 22, true);
+          markerText(ctx, label[i], sx + xOff, sy, STEP_LABEL_COLOR, CONTENT_SIZE, true);
           setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: STEP_LABEL_COLOR });
           i++;
           setTimeout(tick, 28);
@@ -1426,11 +1525,11 @@ function drawInstant(
       break;
     case "draw_text":
       markerText(ctx, latexToHuman(p.text as string), p.x as number, p.y as number,
-        TEXT_COLOR, (p.size as number) || 24);
+        TEXT_COLOR, CONTENT_SIZE);
       break;
     case "draw_latex":
       markerText(ctx, latexToHuman(p.latex as string), p.x as number, p.y as number,
-        sc, (p.size as number) || 24);
+        sc, CONTENT_SIZE);
       break;
     case "draw_line":
       ctx.lineCap = "round";
@@ -1482,9 +1581,9 @@ function drawInstant(
       break;
     case "step_marker":
       markerText(ctx, `Step ${p.step as number}`, p.x as number, p.y as number,
-        STEP_LABEL_COLOR, 22, true);
+        STEP_LABEL_COLOR, CONTENT_SIZE, true);
       // Wavy underline
-      ctx.font = `bold 22px ${FONT}`;
+      ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
       drawWavyLine(ctx, p.x as number, (p.y as number) + 8,
         (p.x as number) + ctx.measureText(`Step ${p.step as number}`).width, (p.y as number) + 8,
         "rgba(94,234,212,0.3)", 1.5);
@@ -1505,11 +1604,11 @@ function drawInstant(
         ctx.fill();
         markerText(ctx, label, qX + 6, qY + 2, "#818cf8", 15);
         // Math expression
-        ctx.font = `24px ${FONT}`;
-        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, 24);
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
+        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, CONTENT_SIZE);
       } else {
-        ctx.font = `24px ${FONT}`;
-        markerText(ctx, qText, qX, qY, TEXT_COLOR, 24);
+        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
+        markerText(ctx, qText, qX, qY, TEXT_COLOR, CONTENT_SIZE);
       }
       // Underline
       ctx.beginPath();
