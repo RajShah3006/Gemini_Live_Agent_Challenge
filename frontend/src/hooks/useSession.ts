@@ -133,6 +133,7 @@ export function useSession() {
               setIsThinking(false);
             }
             if (msg.payload.error) {
+              setIsThinking(false);
               setErrorMessage(msg.payload.error as string);
               setTimeout(() => setErrorMessage(null), 6000);
             }
@@ -145,6 +146,7 @@ export function useSession() {
             break;
           case "error":
             console.error("Server error:", msg.payload);
+            setIsThinking(false);
             setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
             setTimeout(() => setErrorMessage(null), 6000);
             break;
@@ -177,6 +179,7 @@ export function useSession() {
         setIsConnected(false);
         setIsListening(false);
         setIsSpeaking(false);
+        setIsThinking(false);
         stopMic();
         stopAudio();
         // Auto-reconnect with exponential backoff (unless intentional disconnect)
