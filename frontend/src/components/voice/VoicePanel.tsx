@@ -12,11 +12,13 @@ interface VoicePanelProps {
   isListening: boolean;
   isSpeaking: boolean;
   isThinking?: boolean;
+  autoMicEnabled: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onSendText: (text: string, imageBase64?: string) => void;
   onStartTalking: () => void;
   onStopTalking: () => void;
+  onToggleAutoMic: () => void;
   questions?: QuestionInfo[];
   inputRef?: RefObject<HTMLInputElement | null>;
   textInput: string;
@@ -28,11 +30,13 @@ export function VoicePanel({
   isListening,
   isSpeaking,
   isThinking = false,
+  autoMicEnabled,
   onConnect,
   onDisconnect,
   onSendText,
   onStartTalking,
   onStopTalking,
+  onToggleAutoMic,
   questions = [],
   inputRef,
   textInput,
@@ -87,7 +91,9 @@ export function VoicePanel({
         {isListening ? (
           <>
             <AudioVisualizer active color="red" bars={4} />
-            <span className="text-xs font-medium" style={{ color: "var(--danger)" }}>Speaking...</span>
+            <span className="text-xs font-medium" style={{ color: "var(--danger)" }}>
+              {autoMicEnabled ? "Listening…" : "Speaking..."}
+            </span>
           </>
         ) : isSpeaking ? (
           <>
@@ -99,32 +105,70 @@ export function VoicePanel({
         )}
       </div>
 
-      <div className="relative">
-        {isListening && (
-          <div className="absolute inset-0 rounded-lg" style={{ animation: "talkRing 1s ease-out infinite", border: "2px solid rgba(248,113,113,0.3)" }} />
-        )}
-        <button
-          onMouseDown={onStartTalking}
-          onMouseUp={onStopTalking}
-          onMouseLeave={onStopTalking}
-          onTouchStart={onStartTalking}
-          onTouchEnd={onStopTalking}
-          className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
-          aria-label={isListening ? "Release to stop talking" : "Hold to talk"}
-          style={{
-            background: isListening ? "var(--danger)" : "var(--bg-elevated)",
-            color: isListening ? "#fff" : "var(--text-secondary)",
-            border: isListening ? "none" : "1px solid var(--border)",
-            transform: isListening ? "scale(1.02)" : "scale(1)",
-          }}
-        >
-          {isListening ? "🔴 Release" : "🎤 Hold to talk"}
-        </button>
-      </div>
+      {/* Mic button — push-to-talk when auto-mic is off, status indicator when on */}
+      <div className="flex items-center gap-1.5">
+        <div className="relative">
+          {isListening && (
+            <div className="absolute inset-0 rounded-lg" style={{ animation: "talkRing 1s ease-out infinite", border: "2px solid rgba(248,113,113,0.3)" }} />
+          )}
+          {autoMicEnabled ? (
+            // Auto-mic mode: button shows current state; click to force-stop listening
+            <button
+              onClick={isListening ? onStopTalking : undefined}
+              className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
+              aria-label={isListening ? "Stop listening" : "Mic will open after response"}
+              style={{
+                background: isListening ? "var(--danger)" : "rgba(52,211,153,0.12)",
+                color: isListening ? "#fff" : "var(--success)",
+                border: isListening ? "none" : "1px solid rgba(52,211,153,0.25)",
+                cursor: isListening ? "pointer" : "default",
+              }}
+            >
+              {isListening ? "🔴 Listening…" : "🎙️ Mic ready"}
+            </button>
+          ) : (
+            // Push-to-talk mode
+            <button
+              onMouseDown={onStartTalking}
+              onMouseUp={onStopTalking}
+              onMouseLeave={onStopTalking}
+              onTouchStart={onStartTalking}
+              onTouchEnd={onStopTalking}
+              className="rounded-lg px-4 py-2 text-sm font-medium transition-all"
+              aria-label={isListening ? "Release to stop talking" : "Hold to talk"}
+              style={{
+                background: isListening ? "var(--danger)" : "var(--bg-elevated)",
+                color: isListening ? "#fff" : "var(--text-secondary)",
+                border: isListening ? "none" : "1px solid var(--border)",
+                transform: isListening ? "scale(1.02)" : "scale(1)",
+              }}
+            >
+              {isListening ? "🔴 Release" : "🎤 Hold to talk"}
+            </button>
+          )}
+        </div>
 
-      <span className="text-[10px] hidden sm:inline" style={{ color: "var(--text-muted)" }}>
-        or <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Space</kbd>
-      </span>
+        {/* Auto-mic toggle */}
+        <button
+          onClick={onToggleAutoMic}
+          title={autoMicEnabled ? "Auto-mic ON — mic opens after each response. Click to switch to push-to-talk." : "Auto-mic OFF — hold button to talk. Click to enable auto-mic."}
+          className="rounded-lg px-2 py-2 text-[11px] font-semibold transition-all"
+          style={{
+            background: autoMicEnabled ? "rgba(52,211,153,0.15)" : "rgba(100,116,139,0.1)",
+            color: autoMicEnabled ? "var(--success)" : "var(--text-muted)",
+            border: `1px solid ${autoMicEnabled ? "rgba(52,211,153,0.3)" : "rgba(100,116,139,0.15)"}`,
+          }}
+          aria-label={autoMicEnabled ? "Disable auto-mic" : "Enable auto-mic"}
+        >
+          {autoMicEnabled ? "🟢 Auto" : "Auto"}
+        </button>
+
+        {!autoMicEnabled && (
+          <span className="text-[10px] hidden sm:inline" style={{ color: "var(--text-muted)" }}>
+            or <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Space</kbd>
+          </span>
+        )}
+      </div>
 
       <div className="h-6 w-px" style={{ background: "var(--border)" }} />
 
@@ -149,6 +193,33 @@ export function VoicePanel({
           </div>
         )}
         <div className="flex-1 space-y-2">
+          {/* Lecture quick-start chips — shown only before the first question */}
+          {questions.length === 0 && !textInput && !pendingImage && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { icon: "📚", label: "Teach me about…", value: "Teach me about " },
+                { icon: "🔢", label: "Solve step by step", value: "Solve: " },
+                { icon: "💡", label: "Explain concept", value: "Explain " },
+                { icon: "📐", label: "Show an example", value: "Show me an example of " },
+              ].map(({ icon, label, value }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    onTextInputChange(value);
+                    inputRef?.current?.focus();
+                  }}
+                  className="rounded-full px-2.5 py-1 text-[11px] font-medium transition-all hover:brightness-125"
+                  style={{
+                    background: "rgba(99,102,241,0.08)",
+                    color: "#a5b4fc",
+                    border: "1px solid rgba(99,102,241,0.18)",
+                  }}
+                >
+                  {icon} {label}
+                </button>
+              ))}
+            </div>
+          )}
           {pendingImage && (
             <div
               className="flex items-center gap-2 rounded-lg px-2 py-2"
@@ -189,7 +260,11 @@ export function VoicePanel({
                   void processImageFile(file);
                 }
               }}
-              placeholder={questions.length > 0 ? "Type a question, click Q# to follow up, or paste a photo..." : "Type a question or paste a photo..."}
+              placeholder={
+                questions.length > 0
+                  ? "Ask a follow-up, click Q# to reference a step, or paste a photo…"
+                  : "Teach me about… / Solve: … / Explain… / or paste a photo"
+              }
               className="flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-colors focus:ring-1 focus:ring-[var(--border-focus)]"
               style={{
                 background: "var(--bg-elevated)",

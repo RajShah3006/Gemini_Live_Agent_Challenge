@@ -40,6 +40,8 @@ export function useSession() {
   const pendingAutoSpeakRef = useRef(false);
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const micActiveRef = useRef(false);
+  // Auto-mic: open the mic automatically after the AI finishes responding
+  const autoMicRef = useRef(true);
 
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -51,6 +53,7 @@ export function useSession() {
   const [whiteboardCommands, setWhiteboardCommands] = useState<WhiteboardCommand[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
+  const [autoMicEnabled, setAutoMicEnabled] = useState(true);
 
   const { playChunk, stop: stopAudio } = useAudioPlayer();
 
@@ -62,31 +65,84 @@ export function useSession() {
     setTtsSpeaking(false);
   }, []);
 
+  // Open the mic after the AI finishes speaking (auto-mic mode).
+  // Uses only refs so it can be called from inside other callbacks safely.
+  const openMicIfAutoEnabled = useCallback(() => {
+    if (!autoMicRef.current) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (micActiveRef.current) return; // already listening
+    micActiveRef.current = true;
+    setIsListening(true);
+  }, []);
+
   const speakText = useCallback((text: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const trimmed = text.trim();
     if (!trimmed) return;
 
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(trimmed);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.onstart = () => setTtsSpeaking(true);
-    utterance.onend = () => {
-      if (activeUtteranceRef.current === utterance) {
-        activeUtteranceRef.current = null;
-        setTtsSpeaking(false);
-      }
+
+    const doSpeak = () => {
+      const utterance = new SpeechSynthesisUtterance(trimmed);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+
+      // Pick a natural-sounding English voice; fall back to browser default
+      const voices = window.speechSynthesis.getVoices();
+      const voice =
+        voices.find((v) => v.name.includes("Google") && v.lang.startsWith("en")) ||
+        voices.find((v) => v.lang.startsWith("en-US")) ||
+        voices.find((v) => v.lang.startsWith("en")) ||
+        null;
+      if (voice) utterance.voice = voice;
+
+      // Chrome bug: speechSynthesis silently pauses mid-utterance on long text.
+      // Keep a watchdog that resumes it every 5 s while speaking.
+      let watchdog: ReturnType<typeof setInterval> | null = null;
+
+      utterance.onstart = () => {
+        setTtsSpeaking(true);
+        watchdog = setInterval(() => {
+          if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+        }, 5000);
+      };
+
+      const cleanup = (interrupted: boolean) => {
+        if (watchdog) clearInterval(watchdog);
+        if (activeUtteranceRef.current === utterance) {
+          activeUtteranceRef.current = null;
+          setTtsSpeaking(false);
+          // After AI finishes speaking, open the mic for the next question
+          if (!interrupted) openMicIfAutoEnabled();
+        }
+      };
+
+      utterance.onend = () => cleanup(false);
+      utterance.onerror = (e) => {
+        if (e.error !== "interrupted") console.warn("TTS error:", e.error);
+        cleanup(e.error === "interrupted");
+      };
+
+      activeUtteranceRef.current = utterance;
+      window.speechSynthesis.speak(utterance);
     };
-    utterance.onerror = () => {
-      if (activeUtteranceRef.current === utterance) {
-        activeUtteranceRef.current = null;
-        setTtsSpeaking(false);
-      }
-    };
-    activeUtteranceRef.current = utterance;
-    window.speechSynthesis.speak(utterance);
-  }, []);
+
+    // Voices may not be loaded yet (common on first page load)
+    if (window.speechSynthesis.getVoices().length === 0) {
+      const handler = () => {
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+        doSpeak();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", handler);
+      // Fallback: speak even if voiceschanged never fires
+      setTimeout(() => {
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+        if (!activeUtteranceRef.current) doSpeak();
+      }, 1000);
+    } else {
+      doSpeak();
+    }
+  }, [openMicIfAutoEnabled]);
 
   const sendAudioChunk = useCallback(
     (base64: string) => {
@@ -168,6 +224,11 @@ export function useSession() {
             }
             if (msg.payload.turn_complete) {
               setIsThinking(false);
+              // For voice responses (Live API), open mic after audio buffer drains.
+              // TTS responses open the mic in utterance.onend instead.
+              if (!pendingAutoSpeakRef.current) {
+                setTimeout(() => openMicIfAutoEnabled(), 800);
+              }
             }
             if (msg.payload.error) {
               pendingAutoSpeakRef.current = false;
@@ -195,7 +256,7 @@ export function useSession() {
         console.error("Failed to parse server message:", err);
       }
     },
-    [addTranscript, playChunk, speakText, stopAudio, stopBrowserSpeech],
+    [addTranscript, openMicIfAutoEnabled, playChunk, speakText, stopAudio, stopBrowserSpeech],
   );
 
   const connect = useCallback(() => {
@@ -266,6 +327,19 @@ export function useSession() {
     setIsThinking(true);
   }, []);
 
+  const toggleAutoMic = useCallback(() => {
+    setAutoMicEnabled((prev) => {
+      const next = !prev;
+      autoMicRef.current = next;
+      // If turning off, stop any active auto-mic listening
+      if (!next && micActiveRef.current) {
+        micActiveRef.current = false;
+        setIsListening(false);
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (!isConnected) return;
     const down = (e: KeyboardEvent) => {
@@ -300,6 +374,9 @@ export function useSession() {
   const sendImage = useCallback(
     (base64: string, text = "") => {
       const cleaned = normalizeInput(text);
+      // Stop any ongoing auto-mic listening so we're in a clean state
+      micActiveRef.current = false;
+      setIsListening(false);
       pendingAutoSpeakRef.current = true;
       stopAudio();
       stopBrowserSpeech();
@@ -329,6 +406,9 @@ export function useSession() {
       }
       if (!cleaned.trim()) return;
 
+      // Stop any ongoing auto-mic listening so we're in a clean state
+      micActiveRef.current = false;
+      setIsListening(false);
       pendingAutoSpeakRef.current = true;
       stopAudio();
       stopBrowserSpeech();
@@ -371,5 +451,7 @@ export function useSession() {
     whiteboardCommands,
     transcript,
     voiceCommand,
+    autoMicEnabled,
+    toggleAutoMic,
   };
 }

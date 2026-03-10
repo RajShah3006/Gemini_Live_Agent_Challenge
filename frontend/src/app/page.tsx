@@ -24,6 +24,8 @@ export default function Home() {
     whiteboardCommands,
     transcript,
     voiceCommand,
+    autoMicEnabled,
+    toggleAutoMic,
   } = useSession();
 
   const [showHistory, setShowHistory] = useState(false);
@@ -215,9 +217,28 @@ export default function Home() {
           <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
             {questions.length === 0 && transcript.length === 0 ? (
               <div className="flex h-full items-center justify-center">
-                <p className="text-center text-xs px-4" style={{ color: "var(--text-muted)" }}>
-                  Ask a question to get started. Hold <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid rgba(148,163,184,0.08)" }}>Space</kbd> or type below.
-                </p>
+                <div className="text-center px-4 space-y-3">
+                  <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>How to use MathBoard</p>
+                  <div className="space-y-2 text-left">
+                    {[
+                      { icon: "📚", label: "Lecture", desc: "Teach me about derivatives" },
+                      { icon: "🔢", label: "Problem", desc: "Solve: 2x + 5 = 15" },
+                      { icon: "💡", label: "Follow-up", desc: "Why did you subtract 5?" },
+                      { icon: "📷", label: "Homework", desc: "Upload a photo to grade it" },
+                    ].map(({ icon, label, desc }) => (
+                      <div key={label} className="flex items-start gap-2">
+                        <span className="text-sm shrink-0">{icon}</span>
+                        <div>
+                          <span className="text-[11px] font-semibold" style={{ color: "var(--text-secondary)" }}>{label}: </span>
+                          <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>{desc}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] pt-1" style={{ color: "var(--text-muted)" }}>
+                    Hold <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid rgba(148,163,184,0.08)" }}>Space</kbd> or use the mic to speak
+                  </p>
+                </div>
               </div>
             ) : (
               <>
@@ -352,11 +373,13 @@ export default function Home() {
           isListening={isListening}
           isSpeaking={isSpeaking}
           isThinking={isThinking}
+          autoMicEnabled={autoMicEnabled}
           onConnect={connect}
           onDisconnect={disconnect}
           onSendText={sendText}
           onStartTalking={startTalking}
           onStopTalking={stopTalking}
+          onToggleAutoMic={toggleAutoMic}
           questions={questions}
           inputRef={textInputRef}
           textInput={composerText}

@@ -100,6 +100,7 @@ async def export_whiteboard(session_id: str):
 async def websocket_session(ws: WebSocket):
     await ws.accept()
     session_id = None
+    ws_open = True  # set to False as soon as the client socket closes
 
     # Try to create a Firestore session
     try:
@@ -108,24 +109,35 @@ async def websocket_session(ws: WebSocket):
     except Exception as e:
         logger.warning(f"Firestore session create failed (continuing without): {e}")
 
+    async def _send(payload: dict) -> bool:
+        """Send a JSON message to the client. Returns False if the socket is closed."""
+        if not ws_open:
+            return False
+        try:
+            await ws.send_json(payload)
+            return True
+        except Exception:
+            # Client already disconnected — swallow silently
+            return False
+
     async def on_audio(data: bytes):
         """Forward audio from Gemini to the client."""
         encoded = base64.b64encode(data).decode("utf-8") if isinstance(data, bytes) else data
-        await ws.send_json({"type": "audio", "payload": {"data": encoded}})
+        await _send({"type": "audio", "payload": {"data": encoded}})
 
     async def on_whiteboard(cmd: dict):
         """Forward whiteboard commands to the client."""
         if session_id:
             whiteboard_svc.track_command(session_id, cmd)
-        await ws.send_json({"type": "whiteboard", "payload": cmd})
+        await _send({"type": "whiteboard", "payload": cmd})
 
     async def on_transcript(role: str, text: str):
         """Forward transcript updates to the client."""
-        await ws.send_json({"type": "transcript", "payload": {"role": role, "text": text}})
+        await _send({"type": "transcript", "payload": {"role": role, "text": text}})
 
     async def on_status(status: dict):
         """Forward status updates to the client."""
-        await ws.send_json({"type": "status", "payload": status})
+        await _send({"type": "status", "payload": status})
 
     session = GeminiSession(
         on_audio=on_audio,
@@ -200,6 +212,7 @@ async def websocket_session(ws: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        ws_open = False  # stop all background callbacks from writing to the dead socket
         await session.close()
         if session_id:
             try:
