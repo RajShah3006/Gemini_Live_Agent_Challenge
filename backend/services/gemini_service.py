@@ -133,9 +133,11 @@ RULES:
 8. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
 9. Use symbolic notation on the board, not prose: write "x → ∞" not "as x approaches infinity". Keep board content mathematical.
 10. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
+11. LAYOUT: x always between 30-80. y starts at 60, increment ~100px per line. step_marker occupies ~40px of height — place the FIRST content line of each step at step_y + 60 (e.g. step_marker y=60 → first draw_text/draw_latex at y=120). Never place two items within 50px of each other vertically.
 
 GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
 HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+IMAGE REFERENCES: When a photo is uploaded, explicitly refer to what you can see in the photo or the student's work before solving. Keep using that photo as context for follow-up questions until a new photo is uploaded.
 RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
 START DRAWING IMMEDIATELY when asked a question."""
 
@@ -148,7 +150,7 @@ RULES:
 3. step_marker() for each step heading. Always start with Step 1 for each new question. Do NOT repeat "Step N" in any draw_text — the marker already renders it.
 4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
 5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step" — use step_marker for that. Example: draw_text("Use substitution") not draw_text("Step 1: Use substitution").
-6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200 — no side annotations.
+6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~100px per line. step_marker occupies ~40px of height — place the FIRST content line of each step at step_y + 60 (e.g. step_marker y=60 → first draw_text/draw_latex at y=120). Never place two items within 50px of each other vertically. NEVER put text at x > 200 — no side annotations.
 7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
 8. Return ALL tool calls needed for the complete solution.
 9. At the end, use draw_text() to add a brief reference like "Chain Rule" or "Integration by Parts" — name the theorem/technique used.
@@ -157,12 +159,50 @@ RULES:
 
 GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
 HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+IMAGE REFERENCES: When a photo is uploaded, explicitly refer to what you can see in the photo or the student's work before solving. Keep using that photo as context for follow-up questions until a new photo is uploaded.
 RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
 FOLLOW-UPS: If user says "[Q1]" or "[Q2]", they are asking about a previous question. Use context from your conversation history to answer.
+SPOKEN SUMMARY: After all drawing tool calls, always return a brief 2-3 sentence spoken explanation summarizing what you just drew on the board. This is REQUIRED — the student needs to hear the explanation read aloud.
 START DRAWING IMMEDIATELY when asked a question."""
 
 AUDIO_MODEL = "gemini-2.5-flash-native-audio-latest"
 WHITEBOARD_MODEL = "gemini-2.5-flash-lite"
+STANDARD_API_RETRIES = 3
+LIVE_CONNECT_RETRIES = 3
+RETRYABLE_ERROR_MARKERS = (
+    "429",
+    "500",
+    "503",
+    "504",
+    "resource exhausted",
+    "quota",
+    "rate limit",
+    "temporarily unavailable",
+    "try again",
+    "high demand",
+    "overloaded",
+    "unavailable",
+    "internal",
+)
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in RETRYABLE_ERROR_MARKERS)
+
+
+def _build_image_prompt(user_text: str | None) -> str:
+    cleaned = (user_text or "").strip()
+    base = (
+        "Use the uploaded photo as your main reference. First identify what is visible in the photo, "
+        "including the exact math problem and any student work or mistakes shown. Then explain the problem "
+        "using the photo as context and solve it step by step on the whiteboard."
+    )
+    if cleaned:
+        return f"{base} Also answer the student's request: {cleaned}"
+    return (
+        f"{base} If the photo shows homework, grade each visible problem and explain any corrections."
+    )
 
 
 class GeminiSession:
@@ -199,7 +239,7 @@ class GeminiSession:
         logger.info(f"[WB] Text question: {text[:80]}...")
         await self._generate_whiteboard(text)
 
-    async def send_image(self, base64_data: str):
+    async def send_image(self, base64_data: str, text: str | None = None):
         """Image input → standard generate_content API."""
         if "," in base64_data:
             base64_data = base64_data.split(",", 1)[1]
@@ -214,9 +254,30 @@ class GeminiSession:
         ]
         logger.info("[WB] Image uploaded — analyzing via standard API")
         await self._generate_whiteboard(
-            "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard.",
+            _build_image_prompt(text),
             image_parts=image_parts,
         )
+
+    async def _generate_with_retry(self, *, config: types.GenerateContentConfig):
+        last_error: Exception | None = None
+        for attempt in range(STANDARD_API_RETRIES):
+            try:
+                return await self._client.aio.models.generate_content(
+                    model=WHITEBOARD_MODEL,
+                    contents=self._wb_history,
+                    config=config,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt == STANDARD_API_RETRIES - 1 or not _is_retryable_error(e):
+                    raise
+                wait = 1.5 * (2 ** attempt)
+                logger.warning(
+                    f"[WB] Standard API busy on attempt {attempt + 1}/{STANDARD_API_RETRIES}: {e}. "
+                    f"Retrying in {wait:.1f}s"
+                )
+                await asyncio.sleep(wait)
+        raise last_error or RuntimeError("Standard API request failed")
 
     async def _generate_whiteboard(self, text: str, image_parts: list | None = None):
         """Generate whiteboard commands via standard generate_content API.
@@ -246,17 +307,14 @@ class GeminiSession:
 
             await self.on_status({"speaking": True})
             total_cmds = 0
+            transcript_emitted = False
 
             try:
                 # Standard API: model returns ALL tool calls in one response.
                 # We process them, send function responses, then get one final text reply.
                 # Max 2 rounds to avoid infinite tool-call loops.
                 for round_num in range(2):
-                    response = await self._client.aio.models.generate_content(
-                        model=WHITEBOARD_MODEL,
-                        contents=self._wb_history,
-                        config=config,
-                    )
+                    response = await self._generate_with_retry(config=config)
 
                     if not response.candidates:
                         logger.warning("[WB] No candidates in response")
@@ -301,6 +359,7 @@ class GeminiSession:
                         full_text = " ".join(text_parts)
                         logger.info(f"  WB transcript: {full_text[:100]}...")
                         await self.on_transcript("tutor", full_text)
+                        transcript_emitted = True
 
                     # If no function calls, model is done
                     if not function_calls:
@@ -315,9 +374,20 @@ class GeminiSession:
 
                 logger.info(f"[WB] Done — {total_cmds} total whiteboard commands")
 
+                # If Gemini returned no spoken text, emit a fallback so TTS fires
+                if not transcript_emitted and total_cmds > 0:
+                    fallback = "I've worked through the solution step by step on the whiteboard. Check the board for the complete solution."
+                    logger.info("[WB] No transcript from model — emitting fallback for TTS")
+                    await self.on_transcript("tutor", fallback)
+
             except Exception as e:
                 logger.error(f"[WB] Generation error: {e}", exc_info=True)
-                await self.on_status({"error": f"Whiteboard error: {str(e)}"})
+                if _is_retryable_error(e):
+                    await self.on_status({
+                        "error": "The AI tutor is under high demand right now. I retried automatically, but it still did not go through. Please try again in a moment."
+                    })
+                else:
+                    await self.on_status({"error": f"Whiteboard error: {str(e)}"})
             finally:
                 await self.on_status({"speaking": False, "turn_complete": True})
 
@@ -327,7 +397,17 @@ class GeminiSession:
 
     async def send_audio(self, audio_data: bytes):
         """Audio input → Live API (native audio model)."""
-        await self.ensure_connected()
+        try:
+            await self.ensure_connected()
+        except Exception as e:
+            logger.error(f"Live API connect failed: {e}", exc_info=True)
+            message = (
+                "The voice tutor is under high demand right now. I retried automatically, but it still did not connect. Please try again in a moment."
+                if _is_retryable_error(e)
+                else f"Voice connection error: {e}"
+            )
+            await self.on_status({"error": message, "connected": False})
+            return
         if self._session:
             await self._session.send_realtime_input(
                 audio={"data": audio_data, "mime_type": "audio/pcm"}
@@ -358,11 +438,28 @@ class GeminiSession:
                 ),
                 tools=WHITEBOARD_TOOLS,
             )
-            self._ctx = self._client.aio.live.connect(
-                model=AUDIO_MODEL, config=live_config
-            )
-            self._session = await self._ctx.__aenter__()
-            self._receive_task = asyncio.create_task(self._receive_loop())
+            last_error: Exception | None = None
+            for attempt in range(LIVE_CONNECT_RETRIES):
+                try:
+                    self._ctx = self._client.aio.live.connect(
+                        model=AUDIO_MODEL, config=live_config
+                    )
+                    self._session = await self._ctx.__aenter__()
+                    self._receive_task = asyncio.create_task(self._receive_loop())
+                    return
+                except Exception as e:
+                    last_error = e
+                    self._session = None
+                    self._ctx = None
+                    if attempt == LIVE_CONNECT_RETRIES - 1 or not _is_retryable_error(e):
+                        raise
+                    wait = 1.5 * (2 ** attempt)
+                    logger.warning(
+                        f"Live API busy on connect attempt {attempt + 1}/{LIVE_CONNECT_RETRIES}: {e}. "
+                        f"Retrying in {wait:.1f}s"
+                    )
+                    await asyncio.sleep(wait)
+            raise last_error or RuntimeError("Live API connection failed")
         finally:
             self._connecting = False
 
@@ -474,8 +571,8 @@ class GeminiSession:
                 await self.on_status({"speaking": False, "turn_complete": True})
                 # Sync voice context to whiteboard history for follow-up questions
                 self._sync_voice_context()
-                # Proactive teardown — native audio model drops idle connections anyway
-                asyncio.create_task(self._teardown_session())
+                # Keep the Live API session alive for back-and-forth conversation.
+                # The session will reconnect automatically via _reconnect() if it drops.
 
     def _sync_voice_context(self):
         """Add voice conversation context to whiteboard history so text follow-ups have context."""

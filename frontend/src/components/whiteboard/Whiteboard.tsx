@@ -16,7 +16,7 @@ const SHAPE_DURATION = 400;
 const BG = "#0b1120";
 const GRID = "rgba(255,255,255,0.025)";
 const FONT = "'Single Day', 'Segoe Script', cursive";
-const CONTENT_SIZE = 24;  // single font size for all board content
+const CONTENT_SIZE = 28;  // single font size for all board content
 // Clean marker palette — visible on dark bg, no neon
 const TEXT_COLOR = "#e2e8f0";      // white-ish for plain text
 const LINE_COLOR = "#94a3b8";      // soft gray for lines/dividers
@@ -1405,6 +1405,24 @@ function animateCmd(
         const sx = p.x as number, sy = p.y as number;
         const label = `Step ${p.step as number}`;
         ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
+        const fullW = ctx.measureText(label).width;
+
+        // Separator line above step (skip for Step 1)
+        if ((p.step as number) > 1) {
+          ctx.shadowBlur = 0;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy - 18);
+          ctx.lineTo(sx + 300, sy - 18);
+          markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
+        }
+
+        // Filled background pill behind "Step N"
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(94,234,212,0.12)";
+        ctx.beginPath();
+        ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 6);
+        ctx.fill();
+
         let i = 0;
         const tick = () => {
           if (i >= label.length) { resolve(); return; }
@@ -1414,9 +1432,6 @@ function animateCmd(
           i++;
           setTimeout(tick, 28);
         };
-        // Draw wavy underline below step label
-        const fullW = ctx.measureText(label).width;
-        drawWavyLine(ctx, sx, sy + 8, sx + fullW, sy + 8, "rgba(94,234,212,0.3)", 1.5);
         tick();
         break;
       }
@@ -1579,15 +1594,31 @@ function drawInstant(
       ctx.fillStyle = "rgba(94,234,212,0.06)";
       ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
       break;
-    case "step_marker":
-      markerText(ctx, `Step ${p.step as number}`, p.x as number, p.y as number,
-        STEP_LABEL_COLOR, CONTENT_SIZE, true);
-      // Wavy underline
+    case "step_marker": {
+      const sx = p.x as number, sy = p.y as number;
+      const label = `Step ${p.step as number}`;
       ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
-      drawWavyLine(ctx, p.x as number, (p.y as number) + 8,
-        (p.x as number) + ctx.measureText(`Step ${p.step as number}`).width, (p.y as number) + 8,
-        "rgba(94,234,212,0.3)", 1.5);
+      const fullW = ctx.measureText(label).width;
+
+      // Separator line above step (skip for Step 1)
+      if ((p.step as number) > 1) {
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - 18);
+        ctx.lineTo(sx + 300, sy - 18);
+        markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
+      }
+
+      // Filled background pill behind "Step N"
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(94,234,212,0.12)";
+      ctx.beginPath();
+      ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 6);
+      ctx.fill();
+
+      markerText(ctx, label, sx, sy, STEP_LABEL_COLOR, CONTENT_SIZE, true);
       break;
+    }
     case "question_header": {
       const qText = extractMath((p.text as string) || "");
       const label = (p._label as string) || "";

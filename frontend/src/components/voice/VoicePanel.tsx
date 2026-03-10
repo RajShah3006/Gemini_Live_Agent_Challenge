@@ -1,45 +1,63 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AudioVisualizer } from "./AudioVisualizer";
 
 import type { QuestionInfo } from "@/components/whiteboard/Whiteboard";
+import { extractImageFileFromClipboard, readImageFileAsDataUrl } from "@/lib/imageUpload";
 
 interface VoicePanelProps {
   isConnected: boolean;
   isListening: boolean;
   isSpeaking: boolean;
+  isThinking?: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
-  onToggleUpload: () => void;
-  onSendText: (text: string) => void;
+  onSendText: (text: string, imageBase64?: string) => void;
   onStartTalking: () => void;
   onStopTalking: () => void;
   questions?: QuestionInfo[];
   inputRef?: RefObject<HTMLInputElement | null>;
+  textInput: string;
+  onTextInputChange: (value: string) => void;
 }
 
 export function VoicePanel({
   isConnected,
   isListening,
   isSpeaking,
+  isThinking = false,
   onConnect,
   onDisconnect,
-  onToggleUpload,
   onSendText,
   onStartTalking,
   onStopTalking,
   questions = [],
   inputRef,
+  textInput,
+  onTextInputChange,
 }: VoicePanelProps) {
-  const [textInput, setTextInput] = useState("");
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const processImageFile = useCallback(async (file: File) => {
+    setImageError(null);
+    try {
+      setPendingImage(await readImageFileAsDataUrl(file));
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : "Failed to read file");
+    }
+  }, []);
 
   const handleSendText = () => {
     const trimmed = textInput.trim();
-    if (!trimmed) return;
-    onSendText(trimmed);
-    setTextInput("");
+    if (!trimmed && !pendingImage) return;
+    onSendText(trimmed, pendingImage ?? undefined);
+    onTextInputChange("");
+    setPendingImage(null);
+    setImageError(null);
   };
 
   if (!isConnected) {
@@ -65,7 +83,6 @@ export function VoicePanel({
 
   return (
     <div className="flex w-full items-center gap-3">
-      {/* Status + visualizer */}
       <div className="flex items-center gap-2 min-w-[140px]">
         {isListening ? (
           <>
@@ -82,7 +99,6 @@ export function VoicePanel({
         )}
       </div>
 
-      {/* Push-to-talk */}
       <div className="relative">
         {isListening && (
           <div className="absolute inset-0 rounded-lg" style={{ animation: "talkRing 1s ease-out infinite", border: "2px solid rgba(248,113,113,0.3)" }} />
@@ -110,17 +126,15 @@ export function VoicePanel({
         or <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>Space</kbd>
       </span>
 
-      {/* Separator */}
       <div className="h-6 w-px" style={{ background: "var(--border)" }} />
 
-      {/* Text input with question reference chips */}
       <div className="flex flex-1 items-center gap-2">
         {questions.length > 0 && (
           <div className="flex items-center gap-1 shrink-0">
-            {questions.slice(-3).map(q => (
+            {questions.slice(-3).map((q) => (
               <button
                 key={q.idx}
-                onClick={() => setTextInput(prev => `[${q.label}] ${prev}`)}
+                onClick={() => onTextInputChange(`[${q.label}] ${textInput}`)}
                 className="rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors hover:bg-white/15"
                 style={{
                   background: "rgba(99,102,241,0.15)",
@@ -134,42 +148,96 @@ export function VoicePanel({
             ))}
           </div>
         )}
-        <input
-          type="text"
-          ref={inputRef}
-          value={textInput}
-          onChange={(e) => setTextInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSendText()}
-          placeholder={questions.length > 0 ? "Ask a new question or click Q# to follow up..." : "Type a question..."}
-          className="flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-colors focus:ring-1 focus:ring-[var(--border-focus)]"
-          style={{
-            background: "var(--bg-elevated)",
-            color: "var(--text-primary)",
-            border: "1px solid var(--border)",
-          }}
-        />
-        <button
-          onClick={handleSendText}
-          disabled={!textInput.trim()}
-          className="rounded-lg px-3 py-2 text-sm font-medium text-white transition-all disabled:opacity-30"
-          style={{ background: "var(--accent)" }}
-        >
-          Send
-        </button>
+        <div className="flex-1 space-y-2">
+          {pendingImage && (
+            <div
+              className="flex items-center gap-2 rounded-lg px-2 py-2"
+              style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.16)" }}
+            >
+              <img src={pendingImage} alt="Pending upload" className="h-10 w-10 rounded object-cover" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-medium" style={{ color: "var(--text-primary)" }}>
+                  Photo attached
+                </div>
+                <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                  Paste another image to replace it, or press Send to ask with this photo.
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setPendingImage(null);
+                  setImageError(null);
+                }}
+                className="rounded px-2 py-1 text-[11px]"
+                style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+              >
+                Remove
+              </button>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              ref={inputRef}
+              value={textInput}
+              onChange={(e) => onTextInputChange(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendText()}
+              onPaste={(e) => {
+                const file = extractImageFileFromClipboard(e.clipboardData.items);
+                if (file) {
+                  e.preventDefault();
+                  void processImageFile(file);
+                }
+              }}
+              placeholder={questions.length > 0 ? "Type a question, click Q# to follow up, or paste a photo..." : "Type a question or paste a photo..."}
+              className="flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-colors focus:ring-1 focus:ring-[var(--border-focus)]"
+              style={{
+                background: "var(--bg-elevated)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border)",
+              }}
+            />
+            <button
+              onClick={handleSendText}
+              disabled={(!textInput.trim() && !pendingImage) || isThinking}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-white transition-all disabled:opacity-30"
+              style={{ background: "var(--accent)" }}
+            >
+              Send
+            </button>
+          </div>
+          {imageError && (
+            <div className="text-[11px] font-medium" style={{ color: "var(--danger)" }}>
+              {imageError}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Separator */}
       <div className="h-6 w-px" style={{ background: "var(--border)" }} />
 
-      {/* Actions */}
       <button
-        onClick={onToggleUpload}
+        onClick={() => fileInputRef.current?.click()}
         className="rounded-lg px-3 py-2 text-sm transition-colors hover:brightness-125"
         style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
         aria-label="Upload image"
       >
         📷
       </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            void processImageFile(file);
+          }
+          e.currentTarget.value = "";
+        }}
+      />
       <button
         onClick={onDisconnect}
         className="rounded-lg px-3 py-2 text-sm transition-colors hover:brightness-125"

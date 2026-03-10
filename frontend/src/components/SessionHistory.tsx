@@ -45,7 +45,9 @@ export function SessionHistory({ open, onClose }: Props) {
       const r = await fetch(`${API_URL}/api/sessions/${sid}`);
       const data = await r.json();
       setMessages((prev) => ({ ...prev, [sid]: data.messages || [] }));
-    } catch {}
+    } catch (err) {
+      console.error("Failed to load session messages:", err);
+    }
   }
 
   if (!open) return null;

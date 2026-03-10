@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Whiteboard, type QuestionInfo } from "@/components/whiteboard/Whiteboard";
 import { VoicePanel } from "@/components/voice/VoicePanel";
-import { ImageUpload } from "@/components/upload/ImageUpload";
 import { SessionHistory } from "@/components/SessionHistory";
 import { FormulaSheet } from "@/components/FormulaSheet";
 import { HandwritingCanvas } from "@/components/HandwritingCanvas";
@@ -19,7 +18,6 @@ export default function Home() {
     errorMessage,
     connect,
     disconnect,
-    sendImage,
     sendText,
     startTalking,
     stopTalking,
@@ -28,11 +26,11 @@ export default function Home() {
     voiceCommand,
   } = useSession();
 
-  const [showUpload, setShowUpload] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [questions, setQuestions] = useState<QuestionInfo[]>([]);
   const [expandedQ, setExpandedQ] = useState<number | null>(null);
   const [searchFilter, setSearchFilter] = useState("");
+  const [composerText, setComposerText] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLInputElement>(null);
   const toolbarPortalRef = useRef<HTMLDivElement>(null);
@@ -42,32 +40,29 @@ export default function Home() {
   }, []);
 
   const followUp = useCallback((label: string) => {
-    if (textInputRef.current) {
-      textInputRef.current.value = `[${label}] `;
-      textInputRef.current.focus();
-    }
+    setComposerText(`[${label}] `);
+    textInputRef.current?.focus();
   }, []);
 
   const handleHandwritingSubmit = useCallback((blob: Blob) => {
     const reader = new FileReader();
     reader.onload = () => {
       const b64 = (reader.result as string).split(",")[1];
-      if (b64) sendImage(b64);
+      if (b64) sendText("", b64);
     };
     reader.readAsDataURL(blob);
-  }, [sendImage]);
+  }, [sendText]);
 
   // Escape key closes panels
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (showHistory) setShowHistory(false);
-        if (showUpload) setShowUpload(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showHistory, showUpload]);
+  }, [showHistory]);
 
   // Auto-scroll transcript
   useEffect(() => {
@@ -108,10 +103,8 @@ export default function Home() {
         <div className="flex items-center gap-2">
           <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
           <FormulaSheet onInsert={(formula) => {
-            if (textInputRef.current) {
-              textInputRef.current.value += formula;
-              textInputRef.current.focus();
-            }
+            setComposerText((prev) => `${prev}${formula}`);
+            textInputRef.current?.focus();
           }} />
           <button
             onClick={() => setShowHistory(true)}
@@ -229,7 +222,9 @@ export default function Home() {
             ) : (
               <>
                 {/* Question cards with transcript grouped under them */}
-                {questions.filter(q => !searchFilter || q.text.toLowerCase().includes(searchFilter.toLowerCase())).map((q, qi) => {
+                {questions
+                  .filter(q => !searchFilter || q.text.toLowerCase().includes(searchFilter.toLowerCase()))
+                  .map((q, qi) => {
                   const isExpanded = expandedQ === q.idx;
                   // Group transcript: find user message matching this question, then tutor replies until next user message
                   const userIdx = transcript.findIndex(t => t.role === "user" && q.text && t.text.includes(q.text.slice(0, 20)));
@@ -294,15 +289,15 @@ export default function Home() {
                         {isExpanded && (
                         <div className="px-3 pb-2 space-y-1.5" style={{ borderTop: "1px solid rgba(148,163,184,0.04)" }}>
                           {qTranscript.map((msg, mi) => (
-                            <div key={mi} className="text-[11px] leading-relaxed rounded-lg px-2.5 py-1.5"
+                            <div key={mi} className="text-[13px] leading-relaxed rounded-lg px-3 py-2"
                               style={{
                                 background: msg.role === "user" ? "rgba(99,102,241,0.06)" : "rgba(148,163,184,0.04)",
-                                color: "var(--text-secondary)",
+                                color: msg.role === "user" ? "var(--text-secondary)" : "var(--text-primary)",
                               }}>
-                              <span className="text-[9px] font-semibold uppercase opacity-50 mr-1">
+                              <span className="text-[10px] font-semibold uppercase opacity-50 mr-1.5 block mb-0.5">
                                 {msg.role === "user" ? "You" : "Tutor"}:
                               </span>
-                              {msg.text.slice(0, 120)}{msg.text.length > 120 ? "…" : ""}
+                              {msg.text}
                             </div>
                           ))}
                           <button
@@ -341,20 +336,6 @@ export default function Home() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Upload area */}
-          {showUpload && (
-            <div className="px-3 pb-3" style={{ borderTop: "1px solid var(--border)" }}>
-              <div className="pt-3">
-                <ImageUpload
-                  onUpload={(base64) => {
-                    sendImage(base64);
-                    setShowUpload(false);
-                  }}
-                  onCancel={() => setShowUpload(false)}
-                />
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -370,14 +351,16 @@ export default function Home() {
           isConnected={isConnected}
           isListening={isListening}
           isSpeaking={isSpeaking}
+          isThinking={isThinking}
           onConnect={connect}
           onDisconnect={disconnect}
-          onToggleUpload={() => setShowUpload((v) => !v)}
           onSendText={sendText}
           onStartTalking={startTalking}
           onStopTalking={stopTalking}
           questions={questions}
           inputRef={textInputRef}
+          textInput={composerText}
+          onTextInputChange={setComposerText}
         />
       </div>
 

@@ -169,15 +169,20 @@ async def websocket_session(ws: WebSocket):
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
+                image_text = (payload.get("text", "") or "")[:2000]
                 if len(image_data) > 10_000_000:  # ~7.5 MB decoded
                     logger.warning("Image payload too large — skipping")
                     await ws.send_json({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
                     continue
                 if image_data:
-                    await session.send_image(image_data)
+                    await session.send_image(image_data, image_text)
                     if session_id:
                         try:
-                            await session_svc.save_message(session_id, "user", "[image uploaded]")
+                            await session_svc.save_message(
+                                session_id,
+                                "user",
+                                image_text if image_text else "[image uploaded]",
+                            )
                         except Exception as e:
                             logger.warning(f"Firestore save failed: {e}")
 

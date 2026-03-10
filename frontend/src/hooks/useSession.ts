@@ -10,7 +10,6 @@ import type {
 import { useMicrophone } from "./useMicrophone";
 import { useAudioPlayer } from "./useAudioPlayer";
 
-// Pre-compiled typo corrections (avoids creating 30+ regex per keystroke)
 const TYPO_RULES: Array<[RegExp, string]> = Object.entries({
   deravitive: "derivative", derivitive: "derivative", dervative: "derivative",
   intergral: "integral", intergrate: "integrate", integerate: "integrate",
@@ -38,20 +37,56 @@ export function useSession() {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalDisconnectRef = useRef(false);
+  const pendingAutoSpeakRef = useRef(false);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const micActiveRef = useRef(false);
+
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [serverSpeaking, setServerSpeaking] = useState(false);
+  const [ttsSpeaking, setTtsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connected" | "reconnecting" | "failed">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [whiteboardCommands, setWhiteboardCommands] = useState<
-    WhiteboardCommand[]
-  >([]);
+  const [whiteboardCommands, setWhiteboardCommands] = useState<WhiteboardCommand[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
-  const micActiveRef = useRef(false);
 
   const { playChunk, stop: stopAudio } = useAudioPlayer();
+
+  const stopBrowserSpeech = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    pendingAutoSpeakRef.current = false;
+    activeUtteranceRef.current = null;
+    window.speechSynthesis.cancel();
+    setTtsSpeaking(false);
+  }, []);
+
+  const speakText = useCallback((text: string) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(trimmed);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onstart = () => setTtsSpeaking(true);
+    utterance.onend = () => {
+      if (activeUtteranceRef.current === utterance) {
+        activeUtteranceRef.current = null;
+        setTtsSpeaking(false);
+      }
+    };
+    utterance.onerror = () => {
+      if (activeUtteranceRef.current === utterance) {
+        activeUtteranceRef.current = null;
+        setTtsSpeaking(false);
+      }
+    };
+    activeUtteranceRef.current = utterance;
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   const sendAudioChunk = useCallback(
     (base64: string) => {
@@ -64,8 +99,7 @@ export function useSession() {
     [],
   );
 
-  const { isRecording, start: startMic, stop: stopMic } =
-    useMicrophone(sendAudioChunk);
+  const { start: startMic, stop: stopMic } = useMicrophone(sendAudioChunk);
 
   const addTranscript = useCallback(
     (role: "user" | "tutor", text: string) => {
@@ -73,7 +107,6 @@ export function useSession() {
         ...prev,
         { role, text, timestamp: Date.now() },
       ]);
-      // Detect voice commands from user speech
       if (role === "user") {
         const t = text.toLowerCase().trim();
         if (/\b(clear|erase)\s*(the\s*)?(board|whiteboard|canvas)\b/.test(t)) {
@@ -105,34 +138,40 @@ export function useSession() {
               msg.payload as unknown as WhiteboardCommand,
             ]);
             break;
-          case "transcript":
-            addTranscript(
-              (msg.payload.role as "user" | "tutor") || "tutor",
-              msg.payload.text as string,
-            );
+          case "transcript": {
+            const role = (msg.payload.role as "user" | "tutor") || "tutor";
+            const text = msg.payload.text as string;
+            if (role === "tutor" && pendingAutoSpeakRef.current && typeof text === "string") {
+              pendingAutoSpeakRef.current = false;
+              speakText(text);
+            }
+            addTranscript(role, text);
             break;
+          }
           case "status":
             if (msg.payload.speaking !== undefined)
-              setIsSpeaking(msg.payload.speaking as boolean);
+              setServerSpeaking(msg.payload.speaking as boolean);
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
             if (msg.payload.connected !== undefined)
               setIsConnected(msg.payload.connected as boolean);
-            if (msg.payload.reconnected) {
-              console.log("[SESSION] Gemini auto-reconnected successfully");
-            }
             if (msg.payload.reconnecting) {
-              console.log("[SESSION] Gemini reconnecting...");
+              // Gemini is reconnecting; UI already shows status via isConnected
             }
-            // Flush audio queue on interruption
+            if (msg.payload.reconnected) {
+              // Gemini successfully reconnected
+            }
             if (msg.payload.interrupted) {
               stopAudio();
+              stopBrowserSpeech();
               setIsThinking(false);
             }
             if (msg.payload.turn_complete) {
               setIsThinking(false);
             }
             if (msg.payload.error) {
+              pendingAutoSpeakRef.current = false;
+              stopBrowserSpeech();
               setIsThinking(false);
               setErrorMessage(msg.payload.error as string);
               setTimeout(() => setErrorMessage(null), 6000);
@@ -145,23 +184,23 @@ export function useSession() {
             }
             break;
           case "error":
-            console.error("Server error:", msg.payload);
+            pendingAutoSpeakRef.current = false;
+            stopBrowserSpeech();
             setIsThinking(false);
             setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
             setTimeout(() => setErrorMessage(null), 6000);
             break;
         }
-      } catch {
-        console.error("Failed to parse server message");
+      } catch (err) {
+        console.error("Failed to parse server message:", err);
       }
     },
-    [addTranscript, playChunk, stopAudio],
+    [addTranscript, playChunk, speakText, stopAudio, stopBrowserSpeech],
   );
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     intentionalDisconnectRef.current = false;
-    // Clear any pending reconnect timer to prevent duplicate connections
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -178,11 +217,12 @@ export function useSession() {
       ws.onclose = () => {
         setIsConnected(false);
         setIsListening(false);
-        setIsSpeaking(false);
+        setServerSpeaking(false);
+        setTtsSpeaking(false);
         setIsThinking(false);
         stopMic();
         stopAudio();
-        // Auto-reconnect with exponential backoff (unless intentional disconnect)
+        stopBrowserSpeech();
         if (!intentionalDisconnectRef.current && reconnectAttemptRef.current < 5) {
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 16000);
           reconnectAttemptRef.current += 1;
@@ -198,7 +238,7 @@ export function useSession() {
     };
 
     attemptConnect();
-  }, [handleMessage, startMic, stopMic, stopAudio]);
+  }, [handleMessage, startMic, stopAudio, stopBrowserSpeech, stopMic]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
@@ -206,18 +246,19 @@ export function useSession() {
     reconnectAttemptRef.current = 0;
     stopMic();
     stopAudio();
+    stopBrowserSpeech();
     wsRef.current?.close();
     wsRef.current = null;
     setConnectionStatus("idle");
-  }, [stopMic, stopAudio]);
+  }, [stopAudio, stopBrowserSpeech, stopMic]);
 
-  // Push-to-talk: hold Space to talk
   const startTalking = useCallback(() => {
     micActiveRef.current = true;
+    pendingAutoSpeakRef.current = false;
     setIsListening(true);
-    // Flush tutor audio so student can interrupt
     stopAudio();
-  }, [stopAudio]);
+    stopBrowserSpeech();
+  }, [stopAudio, stopBrowserSpeech]);
 
   const stopTalking = useCallback(() => {
     micActiveRef.current = false;
@@ -225,7 +266,6 @@ export function useSession() {
     setIsThinking(true);
   }, []);
 
-  // Spacebar push-to-talk
   useEffect(() => {
     if (!isConnected) return;
     const down = (e: KeyboardEvent) => {
@@ -258,18 +298,40 @@ export function useSession() {
   );
 
   const sendImage = useCallback(
-    (base64: string) => {
-      send("image", { data: base64 });
-      addTranscript("user", "📷 Uploaded an image");
+    (base64: string, text = "") => {
+      const cleaned = normalizeInput(text);
+      pendingAutoSpeakRef.current = true;
+      stopAudio();
+      stopBrowserSpeech();
+      send("image", { data: base64, text: cleaned });
+      if (cleaned) {
+        setWhiteboardCommands((prev) => [
+          ...prev,
+          {
+            id: `qh-${Date.now()}`,
+            action: "question_header",
+            params: { text: cleaned },
+          },
+        ]);
+      }
+      addTranscript("user", cleaned ? `📷 ${cleaned}` : "📷 Uploaded an image");
       setIsThinking(true);
     },
-    [send, addTranscript],
+    [addTranscript, send, stopAudio, stopBrowserSpeech],
   );
 
   const sendText = useCallback(
-    (text: string) => {
+    (text: string, imageBase64?: string) => {
       const cleaned = normalizeInput(text);
-      // Show the user's question on the whiteboard before Gemini responds
+      if (imageBase64) {
+        sendImage(imageBase64, cleaned);
+        return;
+      }
+      if (!cleaned.trim()) return;
+
+      pendingAutoSpeakRef.current = true;
+      stopAudio();
+      stopBrowserSpeech();
       setWhiteboardCommands((prev) => [
         ...prev,
         {
@@ -282,20 +344,21 @@ export function useSession() {
       addTranscript("user", cleaned);
       setIsThinking(true);
     },
-    [send, addTranscript],
+    [addTranscript, send, sendImage, stopAudio, stopBrowserSpeech],
   );
 
   useEffect(() => {
     return () => {
+      stopBrowserSpeech();
       stopMic();
       wsRef.current?.close();
     };
-  }, [stopMic]);
+  }, [stopBrowserSpeech, stopMic]);
 
   return {
     isConnected,
     isListening,
-    isSpeaking,
+    isSpeaking: serverSpeaking || ttsSpeaking,
     isThinking,
     connectionStatus,
     errorMessage,
