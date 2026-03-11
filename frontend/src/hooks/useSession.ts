@@ -32,6 +32,33 @@ function normalizeInput(text: string): string {
   return result;
 }
 
+// ── Student-friendly error messages ──
+function friendlyError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("429") || lower.includes("quota") || lower.includes("rate limit") || lower.includes("resource exhausted"))
+    return "The tutor is taking a short break — too many requests. Try again in a few seconds! ☕";
+  if (lower.includes("503") || lower.includes("unavailable") || lower.includes("overloaded") || lower.includes("high demand"))
+    return "The AI tutor is busy right now. Try again in a moment! 🤔";
+  if (lower.includes("network") || lower.includes("fetch") || lower.includes("connect"))
+    return "Check your internet connection and try again 🌐";
+  if (lower.includes("1011") || lower.includes("1008") || lower.includes("internal"))
+    return "The voice connection dropped — reconnecting automatically... 🔄";
+  if (lower.includes("timeout") || lower.includes("timed out"))
+    return "The request took too long. Try a shorter question! ⏱️";
+  // Pass through if already friendly or short
+  if (raw.length < 100) return raw;
+  return "Something went wrong. Try sending your question again! 🔁";
+}
+
+// ── Thinking timeout — prevents infinite spinner ──
+const THINKING_TIMEOUT_MS = 90_000;
+
+// ── WebSocket heartbeat ──
+// Check every 30s if we've received ANY message recently.
+// Only kill the connection if there's been absolute silence for 120s.
+const HEARTBEAT_CHECK_MS = 30_000;
+const HEARTBEAT_DEAD_MS = 120_000;
+
 export function useSession() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -40,12 +67,23 @@ export function useSession() {
   const pendingAutoSpeakRef = useRef(false);
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const micActiveRef = useRef(false);
+  const micInitializedRef = useRef(false); // [Fix 3] Lazy mic init
+
   // Auto-mic: open the mic automatically after the AI finishes responding
-  const autoMicRef = useRef(true);
+  // [Fix 5] Default to OFF — most users type, not talk
+  const autoMicRef = useRef(false);
+
+  // [Fix 1] Thinking timeout ref
+  const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // [Fix 2] Heartbeat refs
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastMessageAtRef = useRef(Date.now()); // tracks last message from server
 
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [serverSpeaking, setServerSpeaking] = useState(false);
+  const serverSpeakingRef = useRef(false);
   const [ttsSpeaking, setTtsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connected" | "reconnecting" | "failed">("idle");
@@ -53,9 +91,38 @@ export function useSession() {
   const [whiteboardCommands, setWhiteboardCommands] = useState<WhiteboardCommand[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
-  const [autoMicEnabled, setAutoMicEnabled] = useState(true);
+  const [autoMicEnabled, setAutoMicEnabled] = useState(false); // [Fix 5] Default OFF
 
   const { playChunk, stop: stopAudio } = useAudioPlayer();
+
+  // ── [Fix 1] Thinking timeout management ──
+  const clearThinkingTimeout = useCallback(() => {
+    if (thinkingTimerRef.current) {
+      clearTimeout(thinkingTimerRef.current);
+      thinkingTimerRef.current = null;
+    }
+  }, []);
+
+  const startThinkingWithTimeout = useCallback(() => {
+    setIsThinking(true);
+    clearThinkingTimeout();
+    thinkingTimerRef.current = setTimeout(() => {
+      setIsThinking(false);
+      setErrorMessage("The tutor took too long to respond. Try sending your question again! ⏱️");
+      setTimeout(() => setErrorMessage(null), 6000);
+    }, THINKING_TIMEOUT_MS);
+  }, [clearThinkingTimeout]);
+
+  const clearThinking = useCallback(() => {
+    setIsThinking(false);
+    clearThinkingTimeout();
+  }, [clearThinkingTimeout]);
+
+  // ── Show error toast helper ──
+  const showError = useCallback((msg: string) => {
+    setErrorMessage(friendlyError(msg));
+    setTimeout(() => setErrorMessage(null), 6000);
+  }, []);
 
   const stopBrowserSpeech = useCallback(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -66,11 +133,10 @@ export function useSession() {
   }, []);
 
   // Open the mic after the AI finishes speaking (auto-mic mode).
-  // Uses only refs so it can be called from inside other callbacks safely.
   const openMicIfAutoEnabled = useCallback(() => {
     if (!autoMicRef.current) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (micActiveRef.current) return; // already listening
+    if (micActiveRef.current) return;
     micActiveRef.current = true;
     setIsListening(true);
   }, []);
@@ -87,7 +153,6 @@ export function useSession() {
       utterance.rate = 1;
       utterance.pitch = 1;
 
-      // Pick a natural-sounding English voice; fall back to browser default
       const voices = window.speechSynthesis.getVoices();
       const voice =
         voices.find((v) => v.name.includes("Google") && v.lang.startsWith("en")) ||
@@ -96,8 +161,6 @@ export function useSession() {
         null;
       if (voice) utterance.voice = voice;
 
-      // Chrome bug: speechSynthesis silently pauses mid-utterance on long text.
-      // Keep a watchdog that resumes it every 5 s while speaking.
       let watchdog: ReturnType<typeof setInterval> | null = null;
 
       utterance.onstart = () => {
@@ -112,7 +175,6 @@ export function useSession() {
         if (activeUtteranceRef.current === utterance) {
           activeUtteranceRef.current = null;
           setTtsSpeaking(false);
-          // After AI finishes speaking, open the mic for the next question
           if (!interrupted) openMicIfAutoEnabled();
         }
       };
@@ -127,14 +189,12 @@ export function useSession() {
       window.speechSynthesis.speak(utterance);
     };
 
-    // Voices may not be loaded yet (common on first page load)
     if (window.speechSynthesis.getVoices().length === 0) {
       const handler = () => {
         window.speechSynthesis.removeEventListener("voiceschanged", handler);
         doSpeak();
       };
       window.speechSynthesis.addEventListener("voiceschanged", handler);
-      // Fallback: speak even if voiceschanged never fires
       setTimeout(() => {
         window.speechSynthesis.removeEventListener("voiceschanged", handler);
         if (!activeUtteranceRef.current) doSpeak();
@@ -186,27 +246,41 @@ export function useSession() {
     (event: MessageEvent) => {
       try {
         const msg: ServerMessage = JSON.parse(event.data);
+
+        // [Fix 2] ANY message from server = connection is alive
+        lastMessageAtRef.current = Date.now();
+
         switch (msg.type) {
+          case "pong":
+            // Heartbeat response — already tracked above via lastMessageAtRef
+            break;
           case "whiteboard":
-            setIsThinking(false);
+            clearThinking();
             setWhiteboardCommands((prev) => [
               ...prev,
               msg.payload as unknown as WhiteboardCommand,
             ]);
             break;
           case "transcript": {
+            clearThinking();
             const role = (msg.payload.role as "user" | "tutor") || "tutor";
             const text = msg.payload.text as string;
-            if (role === "tutor" && pendingAutoSpeakRef.current && typeof text === "string") {
-              pendingAutoSpeakRef.current = false;
-              speakText(text);
+            if (role === "tutor" && typeof text === "string" && text.trim()) {
+              // Always speak tutor text via browser TTS (unless Live API audio is active)
+              if (pendingAutoSpeakRef.current || !serverSpeakingRef.current) {
+                pendingAutoSpeakRef.current = false;
+                speakText(text);
+              }
             }
             addTranscript(role, text);
             break;
           }
           case "status":
-            if (msg.payload.speaking !== undefined)
-              setServerSpeaking(msg.payload.speaking as boolean);
+            if (msg.payload.speaking !== undefined) {
+              const s = msg.payload.speaking as boolean;
+              setServerSpeaking(s);
+              serverSpeakingRef.current = s;
+            }
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
             if (msg.payload.connected !== undefined)
@@ -215,17 +289,18 @@ export function useSession() {
               // Gemini is reconnecting; UI already shows status via isConnected
             }
             if (msg.payload.reconnected) {
-              // Gemini successfully reconnected
+              // [Fix 7] Show reconnect success toast
+              setErrorMessage("Reconnected! Your session continues. 🔄");
+              setTimeout(() => setErrorMessage(null), 3000);
             }
             if (msg.payload.interrupted) {
               stopAudio();
               stopBrowserSpeech();
-              setIsThinking(false);
+              clearThinking();
             }
             if (msg.payload.turn_complete) {
-              setIsThinking(false);
+              clearThinking();
               // For voice responses (Live API), open mic after audio buffer drains.
-              // TTS responses open the mic in utterance.onend instead.
               if (!pendingAutoSpeakRef.current) {
                 setTimeout(() => openMicIfAutoEnabled(), 800);
               }
@@ -233,13 +308,14 @@ export function useSession() {
             if (msg.payload.error) {
               pendingAutoSpeakRef.current = false;
               stopBrowserSpeech();
-              setIsThinking(false);
-              setErrorMessage(msg.payload.error as string);
-              setTimeout(() => setErrorMessage(null), 6000);
+              clearThinking();
+              showError(msg.payload.error as string);
             }
             break;
           case "audio":
-            setIsThinking(false);
+            clearThinking();
+            // [Fix 11] Cancel browser TTS when Live API audio arrives
+            stopBrowserSpeech();
             if (msg.payload.data) {
               playChunk(msg.payload.data as string);
             }
@@ -247,17 +323,47 @@ export function useSession() {
           case "error":
             pendingAutoSpeakRef.current = false;
             stopBrowserSpeech();
-            setIsThinking(false);
-            setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
-            setTimeout(() => setErrorMessage(null), 6000);
+            clearThinking();
+            showError(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
             break;
         }
       } catch (err) {
         console.error("Failed to parse server message:", err);
       }
     },
-    [addTranscript, openMicIfAutoEnabled, playChunk, speakText, stopAudio, stopBrowserSpeech],
+    [addTranscript, clearThinking, openMicIfAutoEnabled, playChunk, showError, speakText, stopAudio, stopBrowserSpeech],
   );
+
+  // ── [Fix 2] Activity-based heartbeat ──
+  // Instead of strict ping/pong, track when we last received ANY message.
+  // Only send a ping if we haven't heard from the server in a while.
+  // Only kill the connection if there's been absolute silence.
+  const startHeartbeat = useCallback(() => {
+    stopHeartbeatRef.current?.();
+    lastMessageAtRef.current = Date.now();
+    heartbeatIntervalRef.current = setInterval(() => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const silenceMs = Date.now() - lastMessageAtRef.current;
+      if (silenceMs > HEARTBEAT_DEAD_MS) {
+        // No message for 45s — connection is truly dead
+        console.warn(`No server activity for ${Math.round(silenceMs / 1000)}s — reconnecting`);
+        wsRef.current.close();
+      } else if (silenceMs > HEARTBEAT_CHECK_MS * 0.8) {
+        // Getting close to timeout — send a ping to check
+        wsRef.current.send(JSON.stringify({ type: "ping" }));
+      }
+    }, HEARTBEAT_CHECK_MS);
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+  }, []);
+  // Store in ref so startHeartbeat can call it without circular dep
+  const stopHeartbeatRef = useRef(stopHeartbeat);
+  stopHeartbeatRef.current = stopHeartbeat;
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -273,17 +379,27 @@ export function useSession() {
         setIsConnected(true);
         setConnectionStatus("connected");
         reconnectAttemptRef.current = 0;
-        startMic();
+        // [Fix 3] DON'T start mic here — lazy init on first talk
+        // [Fix 2] Start heartbeat
+        startHeartbeat();
+
+        // [Fix 7] Show reconnect toast if this was a reconnect
+        if (micInitializedRef.current) {
+          // Not the first connect — this is a reconnect
+          setErrorMessage("Reconnected! Your session continues. 🔄");
+          setTimeout(() => setErrorMessage(null), 3000);
+        }
       };
       ws.onclose = () => {
         setIsConnected(false);
         setIsListening(false);
         setServerSpeaking(false);
         setTtsSpeaking(false);
-        setIsThinking(false);
-        stopMic();
+        clearThinking();
+        micActiveRef.current = false;
         stopAudio();
         stopBrowserSpeech();
+        stopHeartbeat();
         if (!intentionalDisconnectRef.current && reconnectAttemptRef.current < 5) {
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 16000);
           reconnectAttemptRef.current += 1;
@@ -299,38 +415,53 @@ export function useSession() {
     };
 
     attemptConnect();
-  }, [handleMessage, startMic, stopAudio, stopBrowserSpeech, stopMic]);
+  }, [clearThinking, handleMessage, startHeartbeat, stopAudio, stopBrowserSpeech, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     reconnectAttemptRef.current = 0;
+    micActiveRef.current = false;
     stopMic();
     stopAudio();
     stopBrowserSpeech();
+    stopHeartbeat();
+    clearThinking();
     wsRef.current?.close();
     wsRef.current = null;
     setConnectionStatus("idle");
-  }, [stopAudio, stopBrowserSpeech, stopMic]);
+    micInitializedRef.current = false;
+  }, [clearThinking, stopAudio, stopBrowserSpeech, stopHeartbeat, stopMic]);
+
+  // [Fix 3] Lazy mic initialization — only start mic on first talk
+  const ensureMicStarted = useCallback(() => {
+    if (!micInitializedRef.current) {
+      micInitializedRef.current = true;
+      startMic();
+    }
+  }, [startMic]);
 
   const startTalking = useCallback(() => {
+    ensureMicStarted(); // [Fix 3]
     micActiveRef.current = true;
     pendingAutoSpeakRef.current = false;
     setIsListening(true);
     stopAudio();
     stopBrowserSpeech();
-  }, [stopAudio, stopBrowserSpeech]);
+  }, [ensureMicStarted, stopAudio, stopBrowserSpeech]);
 
   const stopTalking = useCallback(() => {
     micActiveRef.current = false;
     setIsListening(false);
-    setIsThinking(true);
-  }, []);
+    startThinkingWithTimeout(); // [Fix 1] Use timeout version
+  }, [startThinkingWithTimeout]);
 
   const toggleAutoMic = useCallback(() => {
     setAutoMicEnabled((prev) => {
       const next = !prev;
       autoMicRef.current = next;
+      // If turning on, ensure mic is initialized
+      if (next) ensureMicStarted();
       // If turning off, stop any active auto-mic listening
       if (!next && micActiveRef.current) {
         micActiveRef.current = false;
@@ -338,7 +469,7 @@ export function useSession() {
       }
       return next;
     });
-  }, []);
+  }, [ensureMicStarted]);
 
   useEffect(() => {
     if (!isConnected) return;
@@ -374,7 +505,6 @@ export function useSession() {
   const sendImage = useCallback(
     (base64: string, text = "") => {
       const cleaned = normalizeInput(text);
-      // Stop any ongoing auto-mic listening so we're in a clean state
       micActiveRef.current = false;
       setIsListening(false);
       pendingAutoSpeakRef.current = true;
@@ -392,10 +522,21 @@ export function useSession() {
         ]);
       }
       addTranscript("user", cleaned ? `📷 ${cleaned}` : "📷 Uploaded an image");
-      setIsThinking(true);
+      startThinkingWithTimeout(); // [Fix 1]
     },
-    [addTranscript, send, stopAudio, stopBrowserSpeech],
+    [addTranscript, send, startThinkingWithTimeout, stopAudio, stopBrowserSpeech],
   );
+
+  const interrupt = useCallback(() => {
+    micActiveRef.current = false;
+    setIsListening(false);
+    pendingAutoSpeakRef.current = false;
+    stopAudio();
+    stopBrowserSpeech();
+    clearThinking();
+    send("interrupt", {});
+    addTranscript("user", "✋ Stopped the tutor");
+  }, [addTranscript, clearThinking, send, stopAudio, stopBrowserSpeech]);
 
   const sendText = useCallback(
     (text: string, imageBase64?: string) => {
@@ -406,7 +547,6 @@ export function useSession() {
       }
       if (!cleaned.trim()) return;
 
-      // Stop any ongoing auto-mic listening so we're in a clean state
       micActiveRef.current = false;
       setIsListening(false);
       pendingAutoSpeakRef.current = true;
@@ -422,18 +562,20 @@ export function useSession() {
       ]);
       send("text", { text: cleaned });
       addTranscript("user", cleaned);
-      setIsThinking(true);
+      startThinkingWithTimeout(); // [Fix 1]
     },
-    [addTranscript, send, sendImage, stopAudio, stopBrowserSpeech],
+    [addTranscript, send, sendImage, startThinkingWithTimeout, stopAudio, stopBrowserSpeech],
   );
 
   useEffect(() => {
     return () => {
       stopBrowserSpeech();
       stopMic();
+      stopHeartbeat();
+      clearThinkingTimeout();
       wsRef.current?.close();
     };
-  }, [stopBrowserSpeech, stopMic]);
+  }, [clearThinkingTimeout, stopBrowserSpeech, stopHeartbeat, stopMic]);
 
   return {
     isConnected,
@@ -448,9 +590,13 @@ export function useSession() {
     sendText,
     startTalking,
     stopTalking,
+    interrupt,
     whiteboardCommands,
+    setWhiteboardCommands,
     transcript,
+    setTranscript,
     voiceCommand,
+    setVoiceCommand,
     autoMicEnabled,
     toggleAutoMic,
   };

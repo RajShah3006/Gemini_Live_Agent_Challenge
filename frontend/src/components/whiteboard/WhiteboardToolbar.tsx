@@ -18,17 +18,55 @@ interface WhiteboardToolbarProps {
 
 export function WhiteboardToolbar({ canvasRef, containerRef, onUndo, onClear, canUndo, zoom, onZoomChange }: WhiteboardToolbarProps) {
 
-  const handleScreenshot = useCallback(() => {
-    const canvas = canvasRef.current;
+  // Stitch all canvases in the container together to capture the full scrolling whiteboard
+  const stitchCanvases = useCallback(async (): Promise<HTMLCanvasElement | null> => {
+    const container = containerRef.current;
+    if (!container) return null;
+    
+    const canvases = Array.from(container.querySelectorAll("canvas"));
+    if (canvases.length === 0) return null;
+
+    let totalHeight = 0;
+    let maxWidth = 0;
+
+    // Calculate dimensions
+    canvases.forEach(c => {
+      // The CSS size is typically half the internal buffer size (for Retina)
+      // We export at the internal buffer scale for maximum resolution
+      totalHeight += c.height;
+      maxWidth = Math.max(maxWidth, c.width);
+    });
+
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = maxWidth;
+    exportCanvas.height = totalHeight;
+    const ctx = exportCanvas.getContext("2d");
+    if (!ctx) return null;
+
+    // Fill background solid color
+    ctx.fillStyle = "#0F1117"; // var(--bg-base)
+    ctx.fillRect(0, 0, maxWidth, totalHeight);
+
+    let currentY = 0;
+    canvases.forEach(c => {
+      ctx.drawImage(c, 0, currentY, c.width, c.height);
+      currentY += c.height;
+    });
+
+    return exportCanvas;
+  }, [containerRef]);
+
+  const handleScreenshot = useCallback(async () => {
+    const canvas = await stitchCanvases();
     if (!canvas) return;
     const link = document.createElement("a");
     link.download = `mathboard-${Date.now()}.png`;
     link.href = canvas.toDataURL("image/png");
     link.click();
-  }, [canvasRef]);
+  }, [stitchCanvases]);
 
   const handlePDF = useCallback(async () => {
-    const canvas = canvasRef.current;
+    const canvas = await stitchCanvases();
     if (!canvas) return;
     const { jsPDF } = await import("jspdf");
     const imgData = canvas.toDataURL("image/png");
@@ -37,10 +75,10 @@ export function WhiteboardToolbar({ canvasRef, containerRef, onUndo, onClear, ca
     const pdf = new jsPDF({ orientation: landscape ? "landscape" : "portrait", unit: "px", format: [cw, ch] });
     pdf.addImage(imgData, "PNG", 0, 0, cw, ch);
     pdf.save(`mathboard-${Date.now()}.pdf`);
-  }, [canvasRef]);
+  }, [stitchCanvases]);
 
   const handleCopyImage = useCallback(async () => {
-    const canvas = canvasRef.current;
+    const canvas = await stitchCanvases();
     if (!canvas) return;
     try {
       const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, "image/png"));
@@ -48,7 +86,7 @@ export function WhiteboardToolbar({ canvasRef, containerRef, onUndo, onClear, ca
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       }
     } catch { /* clipboard API may not be available */ }
-  }, [canvasRef]);
+  }, [stitchCanvases]);
 
   const handleFullscreen = useCallback(() => {
     const container = containerRef.current?.parentElement;

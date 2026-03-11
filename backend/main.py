@@ -171,13 +171,18 @@ async def websocket_session(ws: WebSocket):
             elif msg_type == "text":
                 text = (payload.get("text", "") or "")[:2000]  # cap at 2000 chars
                 if text:
-                    await session.send_text(text)
-                    # Save user message to Firestore
-                    if session_id:
+                    async def _handle_text(t_str):
                         try:
-                            await session_svc.save_message(session_id, "user", text)
+                            await session.send_text(t_str)
+                            # Save user message to Firestore
+                            if session_id:
+                                try:
+                                    await session_svc.save_message(session_id, "user", t_str)
+                                except Exception as e:
+                                    logger.warning(f"Firestore save failed: {e}")
                         except Exception as e:
-                            logger.warning(f"Firestore save failed: {e}")
+                            logger.error(f"Task _handle_text crashed: {e}", exc_info=True)
+                    asyncio.create_task(_handle_text(text))
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
@@ -187,16 +192,30 @@ async def websocket_session(ws: WebSocket):
                     await ws.send_json({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
                     continue
                 if image_data:
-                    await session.send_image(image_data, image_text)
-                    if session_id:
-                        try:
-                            await session_svc.save_message(
-                                session_id,
-                                "user",
-                                image_text if image_text else "[image uploaded]",
-                            )
-                        except Exception as e:
-                            logger.warning(f"Firestore save failed: {e}")
+                    async def _handle_image(d_b64, t_str):
+                        await session.send_image(d_b64, t_str)
+                        if session_id:
+                            try:
+                                await session_svc.save_message(
+                                    session_id,
+                                    "user",
+                                    t_str if t_str else "[image uploaded]",
+                                )
+                            except Exception as e:
+                                logger.warning(f"Firestore save failed: {e}")
+                    asyncio.create_task(_handle_image(image_data, image_text))
+
+            elif msg_type == "interrupt":
+                async def _handle_interrupt():
+                    try:
+                        await session.interrupt()
+                    except Exception as e:
+                        logger.error(f"Task _handle_interrupt crashed: {e}", exc_info=True)
+                asyncio.create_task(_handle_interrupt())
+
+            elif msg_type == "ping":
+                # [Heartbeat] Respond to client health checks
+                await _send({"type": "pong", "payload": {}})
 
             elif msg_type == "control":
                 action = payload.get("action", "")

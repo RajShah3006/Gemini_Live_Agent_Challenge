@@ -20,7 +20,10 @@ class SessionService:
 
     def _get_db(self) -> firestore.AsyncClient:
         if self._db is None:
-            self._db = firestore.AsyncClient(project=cfg.GCP_PROJECT_ID or None)
+            self._db = firestore.AsyncClient(
+                project=cfg.GCP_PROJECT_ID or None,
+                database=cfg.FIRESTORE_DATABASE,
+            )
         return self._db
 
     @property

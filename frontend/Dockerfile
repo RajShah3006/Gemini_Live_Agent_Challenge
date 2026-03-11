@@ -3,6 +3,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+ENV NEXT_PUBLIC_WS_URL=wss://mathboard-backend-943557716175.us-central1.run.app/ws/session
+ENV NEXT_PUBLIC_API_URL=https://mathboard-backend-943557716175.us-central1.run.app
 RUN npm run build
 
 FROM node:20-alpine AS runner

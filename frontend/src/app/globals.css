@@ -2,15 +2,18 @@
 @import "tailwindcss";
 
 :root {
-  --bg-base: #0a0f1e;
-  --bg-surface: #111827;
-  --bg-elevated: #1a2236;
-  --border: rgba(99,102,241,0.08);
-  --border-focus: rgba(99,102,241,0.3);
-  --accent: #6366f1;
-  --accent-light: #818cf8;
-  --accent-glow: rgba(99,102,241,0.15);
-  --text-primary: #e2e8f0;
+  --bg-base: #0F1117;
+  --bg-surface: #1A1D27;
+  --bg-elevated: #2A2D3E; /* used in some inputs/hover states */
+  --bg-bubble-user: #2A2D3E;
+  --bg-bubble-ai: #1E2235;
+  --bg-bubble-ai-math: #252840;
+  --border: rgba(91,107,248,0.12);
+  --border-focus: #5B6BF8;
+  --accent: #5B6BF8;
+  --accent-light: #7E8CFF;
+  --accent-glow: rgba(91,107,248,0.15);
+  --text-primary: #E8E9F0;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
   --success: #34d399;
@@ -40,6 +43,12 @@ body {
 /* Hidden scrollbar utility */
 .scrollbar-none::-webkit-scrollbar { display: none; }
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Accessibility Focus Ring */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+}
 
 /* ── Animations ── */
 @keyframes mascotFloat {

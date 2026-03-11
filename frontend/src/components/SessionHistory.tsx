@@ -121,22 +121,44 @@ export function SessionHistory({ open, onClose }: Props) {
                   <span>{s.message_count} messages</span>
                 </div>
               </button>
-              {expanded === s.id && messages[s.id] && (
-                <div className="ml-3 mt-1 mb-2 space-y-1.5 border-l-2 pl-3" style={{ borderColor: "var(--border)" }}>
-                  {messages[s.id].length === 0 ? (
-                    <p className="text-[11px] py-1" style={{ color: "var(--text-muted)" }}>No messages recorded</p>
-                  ) : (
-                    messages[s.id].map((m, i) => (
-                      <div key={i} className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                        <span className="font-semibold" style={{ color: m.role === "user" ? "var(--accent-light)" : "var(--text-muted)" }}>
-                          {m.role === "user" ? "You" : "Tutor"}:
-                        </span>{" "}
-                        {m.content}
+              {expanded === s.id && messages[s.id] && (() => {
+                const msgs = messages[s.id];
+                const allText = msgs.map(m => m.content).join(" ").toLowerCase();
+                const found = [];
+                if (allText.match(/derivative|integral|limit|calculus/)) found.push("Calculus");
+                if (allText.match(/equation|solve|variable|algebra|quadratic|polynomial/)) found.push("Algebra");
+                if (allText.match(/triangle|angle|sine|cosine|geometry|trig/)) found.push("Geometry/Trig");
+                if (allText.match(/probability|statistics|mean|median|distribution/)) found.push("Stats");
+                if (found.length === 0 && msgs.length > 0) found.push("General Math");
+
+                return (
+                  <div className="ml-3 mt-1 mb-2 border-l-2 pl-3" style={{ borderColor: "var(--border)" }}>
+                    {msgs.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-2.5 mt-1.5">
+                         {found.map(t => (
+                           <span key={t} className="px-2 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase" style={{ background: "rgba(91,107,248,0.15)", color: "var(--accent-light)" }}>
+                             {t}
+                           </span>
+                         ))}
                       </div>
-                    ))
-                  )}
-                </div>
-              )}
+                    )}
+                    <div className="space-y-1.5">
+                      {msgs.length === 0 ? (
+                        <p className="text-[11px] py-1" style={{ color: "var(--text-muted)" }}>No messages recorded</p>
+                      ) : (
+                        msgs.map((m, i) => (
+                          <div key={i} className="text-[11px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                            <span className="font-semibold" style={{ color: m.role === "user" ? "var(--accent-light)" : "var(--text-muted)" }}>
+                              {m.role === "user" ? "You" : "Tutor"}:
+                            </span>{" "}
+                            {m.content}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>

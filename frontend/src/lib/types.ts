@@ -1,12 +1,12 @@
 /** Message types exchanged over WebSocket */
 
 export interface ClientMessage {
-  type: "audio" | "image" | "text" | "control";
+  type: "audio" | "image" | "text" | "control" | "ping";
   payload: Record<string, unknown>;
 }
 
 export interface ServerMessage {
-  type: "audio" | "whiteboard" | "transcript" | "status" | "error";
+  type: "audio" | "whiteboard" | "transcript" | "status" | "error" | "pong";
   payload: Record<string, unknown>;
 }
 
