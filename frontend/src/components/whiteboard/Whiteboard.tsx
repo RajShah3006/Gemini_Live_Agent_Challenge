@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * Whiteboard — Orchestrator component that manages notebook pages.
+ *
+ * Each user question gets its own NotebookPage (canvas). This component:
+ *  - Routes incoming whiteboard commands to the correct page
+ *  - Splits commands on "question_header" action to create new pages
+ *  - Manages page navigation, scrolling, zoom
+ *  - Hosts the toolbar, graph presets panel, and teacher mascot
+ *  - Handles voice commands (undo, clear, zoom, goto)
+ */
+
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { WhiteboardCommand } from "@/lib/types";

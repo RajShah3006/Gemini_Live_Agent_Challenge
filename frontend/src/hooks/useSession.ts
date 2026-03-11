@@ -1,5 +1,18 @@
 "use client";
 
+/**
+ * useSession — Core session hook managing the WebSocket connection to the backend.
+ *
+ * Responsibilities:
+ *  - WebSocket lifecycle (connect / disconnect / reconnect with exponential backoff)
+ *  - Sending text, images, and audio chunks to the backend
+ *  - Receiving whiteboard commands, transcripts, audio, and status updates
+ *  - Browser TTS for text-mode tutor responses (Live API handles voice-mode audio)
+ *  - Voice commands (undo, clear, zoom, goto question)
+ *  - Heartbeat monitoring (kills stale connections after 120s silence)
+ *  - Thinking timeout (auto-cancels spinner after 90s)
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WS_URL } from "@/lib/config";
 import type {

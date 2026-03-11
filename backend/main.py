@@ -1,3 +1,17 @@
+"""
+MathBoard Backend — FastAPI application entry point.
+
+Endpoints:
+  - WebSocket /ws/session — Main bidirectional channel for voice, text, images, whiteboard
+  - GET /api/sessions      — List saved sessions from Firestore
+  - GET /api/sessions/{id} — Get session detail with messages
+  - GET /health            — Health check
+  - GET /                  — Root info
+
+The WebSocket handler orchestrates GeminiSession (AI), WhiteboardService (state),
+and SessionService (persistence) for each connected client.
+"""
+
 import asyncio
 import base64
 import binascii

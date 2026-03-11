@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * NotebookPage — Renders a single whiteboard page (one per question).
+ *
+ * Handles:
+ *  - Canvas setup with device-pixel-ratio scaling and dot-grid background
+ *  - Layout management: overlap prevention, X clamping, auto-grow
+ *  - Animated drawing of each whiteboard command (text, LaTeX, graphs, shapes)
+ *  - Page boundary detection for overflow into next page
+ */
+
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { WhiteboardCommand } from "@/lib/types";
 import {
@@ -172,11 +182,7 @@ export function NotebookPage({
       }
       if (cmdBottom + 40 > canvasHeight) {
         resizeCanvas();
-        // Re-get context after resize
-        const newCtx = canvas.getContext("2d");
-        if (newCtx) {
-          newCtx.scale(dprRef.current, dprRef.current);
-        }
+        // resizeCanvas() already calls ctx.scale(dpr, dpr) — no need to scale again
       }
 
       // Auto-scroll the page container to show new content
