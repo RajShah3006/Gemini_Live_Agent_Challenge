@@ -393,14 +393,23 @@ export function QuestionsSidebar({
                   )}
 
                   {/* ── Card header (clickable) ── */}
-                  <button
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => {
                       setExpandedQ(isActive ? null : q.idx);
                       if (!isActive && onScrollToQuestion) {
                         onScrollToQuestion(q.label);
                       }
                     }}
-                    className="focus-ring w-full text-left px-3.5 py-3 transition-colors hover:bg-white/[0.03]"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedQ(isActive ? null : q.idx);
+                        if (!isActive && onScrollToQuestion) onScrollToQuestion(q.label);
+                      }
+                    }}
+                    className="focus-ring w-full text-left px-3.5 py-3 transition-colors hover:bg-white/[0.03] cursor-pointer"
                   >
                     {/* Top row: badge + step count + status + menu */}
                     <div className="flex items-center gap-2 mb-1.5">
@@ -488,9 +497,7 @@ export function QuestionsSidebar({
                         → {preview}
                       </div>
                     )}
-                  </button>
-
-                  {/* ── Action dropdown ── */}
+                  </div>
                   {menuOpen === q.idx && (
                     <ActionMenu
                       onAction={(a) => handleAction(q.idx, a)}
