@@ -114,21 +114,51 @@ export function VoicePanel({
 
   if (!isConnected) {
     return (
-      <div className="flex w-full items-center justify-center gap-4">
-        <button
-          onClick={onConnect}
-          className="focus-ring rounded-lg px-6 py-2.5 text-sm font-semibold text-white transition-all hover:brightness-110"
-          style={{
-            background: "var(--accent)",
-            animation: "pulseGlow 2.5s ease-in-out infinite",
-          }}
-          aria-label="Start tutoring session"
-        >
-          Start Session
-        </button>
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Connect to start talking with your AI tutor
-        </span>
+      <div className="flex w-full flex-col items-center gap-5 py-2">
+        {/* Hero CTA */}
+        <div className="flex flex-col items-center gap-2 w-full max-w-md">
+          <button
+            onClick={onConnect}
+            className="focus-ring w-full rounded-2xl px-8 py-4 text-base font-bold text-white transition-all hover:brightness-110 hover:scale-[1.01] active:scale-[0.99] shadow-lg"
+            style={{
+              background: "linear-gradient(135deg, #5B6BF8, #7C3AED)",
+              animation: "pulseGlow 2.5s ease-in-out infinite",
+              boxShadow: "0 4px 24px rgba(91,107,248,0.35)",
+            }}
+            aria-label="Start tutoring session"
+          >
+            🦉 Start Tutoring Session
+          </button>
+          <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Ask a question, upload homework, or talk with your AI tutor
+          </span>
+        </div>
+        {/* Sample questions grid */}
+        <div className="grid grid-cols-2 gap-2 w-full max-w-md">
+          {[
+            { icon: "📐", q: "What is the derivative of tan²x?" },
+            { icon: "🔢", q: "Solve x² - 5x + 6 = 0" },
+            { icon: "📈", q: "Graph y = sin(x) + cos(2x)" },
+            { icon: "💡", q: "Explain the chain rule" },
+          ].map(({ icon, q }) => (
+            <button
+              key={q}
+              onClick={() => {
+                onConnect();
+                onTextInputChange(q);
+              }}
+              className="focus-ring flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[12px] transition-all hover:scale-[1.02] hover:bg-white/5 active:scale-[0.98]"
+              style={{
+                background: "rgba(99,102,241,0.06)",
+                border: "1px solid rgba(99,102,241,0.12)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span className="text-base shrink-0">{icon}</span>
+              <span className="line-clamp-2 leading-snug">{q}</span>
+            </button>
+          ))}
+        </div>
       </div>
     );
   }
@@ -333,15 +363,15 @@ export function VoicePanel({
             
             <button
               onClick={onToggleAutoMic}
-              title={autoMicEnabled ? "Switch to push-to-talk." : "Enable auto-mic."}
-              className="focus-ring rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-all hidden sm:block"
+              title={autoMicEnabled ? "Switch to push-to-talk" : "Enable auto-listen (mic opens after tutor responds)"}
+              className="focus-ring rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-all hidden sm:flex items-center gap-1"
               style={{
                 background: autoMicEnabled ? "rgba(52,211,153,0.15)" : "rgba(100,116,139,0.1)",
                 color: autoMicEnabled ? "var(--success)" : "var(--text-muted)",
                 border: `1px solid ${autoMicEnabled ? "rgba(52,211,153,0.3)" : "rgba(100,116,139,0.15)"}`,
               }}
             >
-              {autoMicEnabled ? "Auto ON" : "Auto"}
+              {autoMicEnabled ? "🟢 Auto-Listen" : "🔇 Push-to-Talk"}
             </button>
           </div>
           
@@ -382,9 +412,9 @@ export function VoicePanel({
               background: inputMode === "math" ? "rgba(52,211,153,0.1)" : "transparent",
               border: `1px solid ${inputMode === "math" ? "rgba(52,211,153,0.3)" : "var(--border)"}`
             }}
-            title="Toggle Math Keyboard"
+            title="Toggle equation editor for math formulas"
           >
-            🧮 {inputMode === "math" ? "Math" : "Math"}
+            🧮 {inputMode === "math" ? "Equation" : "Equation"}
           </button>
         </div>
 

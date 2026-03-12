@@ -73,12 +73,7 @@ export function useMicrophone(onAudioChunk: (base64: string) => void) {
             const s = Math.max(-1, Math.min(1, float32[i]));
             int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
           }
-          const bytes = new Uint8Array(int16.buffer);
-          let binary = "";
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          onAudioChunkRef.current(btoa(binary));
+          onAudioChunkRef.current(arrayBufferToBase64(int16.buffer));
         };
         source.connect(processor);
         processor.connect(context.destination);

@@ -119,10 +119,12 @@ export function Whiteboard({
           }
         } else if (pagesRef.current.length > 0) {
           const trimmed = rawText.trim();
+          // Only treat as follow-up if it's very short and starts with clarifying words
+          // (not math keywords that indicate a new problem)
           const looksLikeFollowUp =
-            trimmed.length < 60 &&
-            !/[0-9]{2,}|[+\-*/^=∫∑∏√]|\\frac|derivative|integral|solve|graph|plot/i.test(trimmed) &&
-            /^(why|how|what|explain|elaborate|more|detail|show|can you|could you|tell me|again|huh|isn.t|doesn.t|but|and|also|wait|so|really|isn.t that|what about|what if)/i.test(trimmed);
+            trimmed.length < 40 &&
+            !/[0-9]{2,}|[+\-*/^=∫∑∏√]|\\frac|derivative|integral|solve|graph|plot|find|compute|evaluate|calculate|simplify/i.test(trimmed) &&
+            /^(why|explain|elaborate|more|detail|huh|isn.t|doesn.t|but|wait|really|isn.t that|what about that)/i.test(trimmed);
           if (looksLikeFollowUp) {
             for (let i = pagesRef.current.length - 1; i >= 0; i--) {
               if (!pagesRef.current[i].isFollowUp) {
@@ -531,9 +533,24 @@ export function Whiteboard({
                 <h2 className="text-xl font-semibold mb-1" style={{ color: "var(--accent-light)", textShadow: "0 0 20px var(--accent-glow)" }}>
                   Hi! I&apos;m MathBoard 🦉
                 </h2>
-                <p className="text-sm max-w-[280px] mx-auto" style={{ color: "var(--text-secondary)" }}>
-                  Upload a photo of your homework or hold <kbd className="rounded px-1.5 py-0.5 text-[11px]" style={{ border: "1px solid var(--border)", color: "var(--accent-light)" }}>Space</kbd> to ask me anything
+                <p className="text-sm max-w-[320px] mx-auto mb-4" style={{ color: "var(--text-secondary)" }}>
+                  Upload a photo of your homework, hold <kbd className="rounded px-1.5 py-0.5 text-[11px]" style={{ border: "1px solid var(--border)", color: "var(--accent-light)" }}>Space</kbd> to talk, or type a question below
                 </p>
+                <div className="flex flex-wrap justify-center gap-2 max-w-[360px] mx-auto">
+                  {["What is π?", "Solve 2x+3=7", "Explain fractions"].map((q) => (
+                    <span
+                      key={q}
+                      className="rounded-full px-3 py-1 text-[11px] font-medium"
+                      style={{
+                        background: "rgba(99,102,241,0.08)",
+                        border: "1px solid rgba(99,102,241,0.15)",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {q}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           )}

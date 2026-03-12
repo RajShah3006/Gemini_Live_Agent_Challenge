@@ -26,6 +26,12 @@ class SessionService:
             )
         return self._db
 
+    def close(self):
+        """Close the Firestore client (call on app shutdown)."""
+        if self._db:
+            self._db.close()
+            self._db = None
+
     @property
     def _col(self):
         return self._get_db().collection(cfg.FIRESTORE_COLLECTION)

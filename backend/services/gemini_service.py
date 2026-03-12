@@ -302,6 +302,7 @@ class GeminiSession:
         self._ctx = None
         self._receive_task: asyncio.Task | None = None
         self._connecting = False
+        self._connected_event = asyncio.Event()
         self._speaking = False
         self._audio_transcript_buf: list[str] = []  # capture voice model text
 
@@ -309,6 +310,8 @@ class GeminiSession:
         self._wb_history: list[types.Content] = []
         self._wb_lock = asyncio.Lock()  # prevent concurrent whiteboard generation
         self._wb_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._closed = False
 
     async def interrupt(self):
         """Immediately stop all generating tasks (both text and voice)."""
@@ -321,7 +324,8 @@ class GeminiSession:
             
         # Nuke Voice API session to stop current output
         if self._session:
-            asyncio.create_task(self._reconnect())
+            reconnect_task = asyncio.create_task(self._reconnect())
+            self._reconnect_task = reconnect_task
 
     # ═══════════════════════════════════════════════════════════
     #  STANDARD API — text & image (zero connection issues)
@@ -359,11 +363,20 @@ class GeminiSession:
         last_error: Exception | None = None
         for attempt in range(STANDARD_API_RETRIES):
             try:
-                return await self._client.aio.models.generate_content(
-                    model=WHITEBOARD_MODEL,
-                    contents=self._wb_history,
-                    config=config,
+                return await asyncio.wait_for(
+                    self._client.aio.models.generate_content(
+                        model=WHITEBOARD_MODEL,
+                        contents=self._wb_history,
+                        config=config,
+                    ),
+                    timeout=60.0,  # 60s max per attempt
                 )
+            except asyncio.TimeoutError:
+                last_error = asyncio.TimeoutError("Gemini API timed out after 60s")
+                logger.warning(f"[WB] API timeout on attempt {attempt + 1}/{STANDARD_API_RETRIES}")
+                if attempt == STANDARD_API_RETRIES - 1:
+                    raise
+                await asyncio.sleep(1.5 * (2 ** attempt))
             except Exception as e:
                 last_error = e
                 if attempt == STANDARD_API_RETRIES - 1 or not _is_retryable_error(e):
@@ -521,12 +534,14 @@ class GeminiSession:
         if self._session and not self._connecting:
             return
         if self._connecting:
-            for _ in range(100):  # up to 10s
-                await asyncio.sleep(0.1)
-                if self._session and not self._connecting:
+            # Wait for in-progress connection using event instead of spin-wait
+            try:
+                await asyncio.wait_for(self._connected_event.wait(), timeout=10.0)
+                if self._session:
                     return
-            logger.info("Timed out waiting for Live API reconnect; forcing new connection")
-            self._connecting = False
+            except asyncio.TimeoutError:
+                logger.info("Timed out waiting for Live API reconnect; forcing new connection")
+                self._connecting = False
         logger.info("Opening new Live API session for voice...")
         await self.connect()
 
@@ -565,9 +580,14 @@ class GeminiSession:
             raise last_error or RuntimeError("Live API connection failed")
         finally:
             self._connecting = False
+            self._connected_event.set()
+            # Reset for next wait cycle
+            self._connected_event = asyncio.Event()
 
     async def _reconnect(self):
         """Reconnect Live API after internal error (called from _receive_loop)."""
+        if self._closed:
+            return False
         logger.info("Cleaning up old Live API session...")
         try:
             self._receive_task = None  # don't cancel — we ARE the receive task
@@ -735,6 +755,11 @@ class GeminiSession:
 
     async def close(self):
         """Close all sessions."""
+        self._closed = True
+        # Cancel tracked reconnect task
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
         # Close Live API
         if self._receive_task:
             self._receive_task.cancel()

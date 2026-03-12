@@ -218,7 +218,7 @@ export function getStepColor(step: number): string {
 
 /* ═══ Safe Math Evaluator ═══ */
 
-const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t\n\r]*$/;
+const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t]*$/;
 const SAFE_FUNCS = [
   "Math.sin","Math.cos","Math.tan","Math.abs","Math.sqrt","Math.log","Math.log2","Math.log10",
   "Math.exp","Math.pow","Math.floor","Math.ceil","Math.round","Math.min","Math.max",
@@ -228,9 +228,11 @@ const SAFE_FUNCS = [
 
 export function evalMathFn(expr: string, x: number): number {
   try {
+    // Validate by stripping known-safe functions, then checking only safe chars remain
     let stripped = expr;
     for (const fn of SAFE_FUNCS) stripped = stripped.replaceAll(fn, "");
     if (!SAFE_MATH_RE.test(stripped)) return NaN;
+    // Evaluate the validated expression in a restricted scope (no globals access)
     const fn = new Function("x", "Math", `"use strict"; return (${expr});`);
     const result = fn(x, Math);
     return typeof result === "number" && isFinite(result) ? result : NaN;

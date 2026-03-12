@@ -8,6 +8,7 @@ class PCMCaptureProcessor extends AudioWorkletProcessor {
     super();
     this._buffer = [];
     this._bufferSize = 4096; // ~256ms at 16kHz
+    this._maxBufferSize = 64000; // ~4s at 16kHz — drop oldest if backpressured
   }
 
   process(inputs) {
@@ -17,6 +18,11 @@ class PCMCaptureProcessor extends AudioWorkletProcessor {
     const channelData = input[0];
     for (let i = 0; i < channelData.length; i++) {
       this._buffer.push(channelData[i]);
+    }
+
+    // Prevent unbounded memory growth under backpressure
+    if (this._buffer.length > this._maxBufferSize) {
+      this._buffer.splice(0, this._buffer.length - this._bufferSize);
     }
 
     // Once we have enough samples, send the chunk

@@ -10,6 +10,17 @@ import { QuestionsSidebar } from "@/components/QuestionsSidebar";
 import { useSession } from "@/hooks/useSession";
 import type { WhiteboardCommand, TranscriptEntry } from "@/lib/types";
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  return isMobile;
+}
+
 interface NotebookPage {
   id: string;
   title: string;
@@ -181,9 +192,12 @@ export default function Home() {
   const [expandedQ, setExpandedQ] = useState<number | null>(null);
   const [composerText, setComposerText] = useState("");
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [sentToast, setSentToast] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const toolbarPortalRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
 
   const [pages, setPages] = useState<NotebookPage[]>([
     { id: "page-1", title: "Page 1", transcript: [], whiteboardCommands: [], questions: [] }
@@ -191,48 +205,62 @@ export default function Home() {
   const [activePageId, setActivePageId] = useState("page-1");
 
   const switchPage = useCallback((newId: string) => {
-    // Save current to pages array
-    setPages(prev => prev.map(p => 
-      p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
-    ));
+    // Save current page state, then load the target page — all via functional setState
+    setPages(prev => {
+      const updated = prev.map(p =>
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+      );
+      const newPage = updated.find(p => p.id === newId);
+      if (newPage) {
+        if (typeof setTranscript === "function") setTranscript(newPage.transcript);
+        if (typeof setWhiteboardCommands === "function") setWhiteboardCommands(newPage.whiteboardCommands);
+        setQuestions(newPage.questions);
+        setActivePageId(newId);
 
-    const newPage = pages.find(p => p.id === newId);
-    if (newPage) {
-      if (typeof setTranscript === "function") setTranscript(newPage.transcript);
-      if (typeof setWhiteboardCommands === "function") setWhiteboardCommands(newPage.whiteboardCommands);
-      setQuestions(newPage.questions);
-      setActivePageId(newId);
-      
-      // Disconnect backend context (forces a fresh context)
-      disconnect();
-      if (isConnected) {
-        setTimeout(() => connect(), 100);
+        disconnect();
+        if (isConnected) {
+          setTimeout(() => { try { connect(); } catch (e) { console.error("Reconnect failed:", e); } }, 100);
+        }
       }
-    }
-  }, [activePageId, transcript, whiteboardCommands, questions, pages, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
+      return updated;
+    });
+  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
   const addPage = useCallback(() => {
-    // Save current
-    setPages(prev => prev.map(p => 
-      p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
-    ));
-    const newId = `page-${Date.now()}`;
-    const newPage: NotebookPage = { id: newId, title: `Page ${pages.length + 1}`, transcript: [], whiteboardCommands: [], questions: [] };
-    setPages(prev => [...prev, newPage]);
-    if (typeof setTranscript === "function") setTranscript([]);
-    if (typeof setWhiteboardCommands === "function") setWhiteboardCommands([]);
-    setQuestions([]);
-    setActivePageId(newId);
+    setPages(prev => {
+      // Save current page state
+      const updated = prev.map(p =>
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+      );
+      const newId = `page-${Date.now()}`;
+      const newPage: NotebookPage = { id: newId, title: `Page ${updated.length + 1}`, transcript: [], whiteboardCommands: [], questions: [] };
+      if (typeof setTranscript === "function") setTranscript([]);
+      if (typeof setWhiteboardCommands === "function") setWhiteboardCommands([]);
+      setQuestions([]);
+      setActivePageId(newId);
 
-    disconnect();
-    if (isConnected) {
-      setTimeout(() => connect(), 100);
-    }
-  }, [activePageId, transcript, whiteboardCommands, questions, pages.length, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
+      disconnect();
+      if (isConnected) {
+        setTimeout(() => { try { connect(); } catch (e) { console.error("Reconnect failed:", e); } }, 100);
+      }
+      return [...updated, newPage];
+    });
+  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
   const handleQuestionsChange = useCallback((qs: QuestionInfo[]) => {
     setQuestions(qs);
   }, []);
+
+  // Wrap sendText to show feedback toast
+  const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
+    sendText(text, imageBase64);
+    const label = imageBase64 ? "📷 Image sent" : text ? "✅ Sent" : "";
+    if (label) {
+      setSentToast(label);
+      setTimeout(() => setSentToast(null), 1800);
+    }
+    if (isMobile) setShowSidebar(false);
+  }, [sendText, isMobile]);
 
   const followUp = useCallback((label: string) => {
     setComposerText(`[${label}] `);
@@ -248,16 +276,20 @@ export default function Home() {
     const reader = new FileReader();
     reader.onload = () => {
       const b64 = (reader.result as string).split(",")[1];
-      if (b64) sendText("", b64);
+      if (b64) sendTextWithToast("", b64);
+    };
+    reader.onerror = () => {
+      console.error("Failed to read handwriting data");
     };
     reader.readAsDataURL(blob);
-  }, [sendText]);
+  }, [sendTextWithToast]);
 
   // Escape key closes panels
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (showHistory) setShowHistory(false);
+        if (showSidebar) setShowSidebar(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -281,9 +313,19 @@ export default function Home() {
     <main className="flex h-screen flex-col" style={{ background: "var(--bg-base)" }}>
       {/* ── Error Toast ── */}
       {errorMessage && (
-        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-5 py-3 text-sm font-medium shadow-lg"
-          style={{ background: "var(--danger)", color: "#fff", maxWidth: "90vw" }}>
+        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-5 py-3 text-sm font-medium shadow-lg cursor-pointer"
+          style={{ background: "var(--danger)", color: "#fff", maxWidth: "90vw" }}
+          onClick={() => {/* error is auto-dismissed, but click provides feedback */}}
+          role="alert"
+        >
           {errorMessage}
+        </div>
+      )}
+      {/* ── Sent Toast ── */}
+      {sentToast && (
+        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-4 py-2 text-[12px] font-medium shadow-lg pointer-events-none"
+          style={{ background: "rgba(52,211,153,0.15)", color: "var(--success)", border: "1px solid rgba(52,211,153,0.3)", backdropFilter: "blur(8px)" }}>
+          {sentToast}
         </div>
       )}
       {/* ── Header ── */}
@@ -295,6 +337,15 @@ export default function Home() {
         }}
       >
         <div className="flex items-center gap-6">
+          {/* Mobile hamburger */}
+          <button
+            className="md:hidden focus-ring flex h-8 w-8 items-center justify-center rounded-lg text-lg transition-colors hover:bg-white/5"
+            style={{ color: "var(--text-secondary)" }}
+            onClick={() => setShowSidebar(!showSidebar)}
+            aria-label="Toggle questions panel"
+          >
+            {showSidebar ? "✕" : "☰"}
+          </button>
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
               style={{ background: "var(--accent)" }}>
@@ -388,7 +439,7 @@ export default function Home() {
       {/* ── Main Area ── */}
       <div className="flex flex-1 overflow-hidden relative">
         {/* Secondary Floating Tools Menu (Right Edge) */}
-        <div className="absolute right-4 top-4 z-30 flex flex-col gap-2">
+        <div className="absolute right-2 md:right-4 top-2 md:top-4 z-30 flex flex-col gap-2">
           <div className="flex flex-col items-center gap-2 rounded-xl p-2 shadow-sm"
                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
             <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
@@ -409,17 +460,26 @@ export default function Home() {
         </div>
 
         {/* ── Left Panel: Questions & Transcript ── */}
-        <QuestionsSidebar
-          questions={questions}
-          transcript={transcript}
-          expandedQ={expandedQ}
-          setExpandedQ={setExpandedQ}
-          onFollowUp={followUp}
-          onComposerFill={composerFill}
-          isThinking={isThinking}
-          chatEndRef={chatEndRef}
-          onScrollToQuestion={(label) => setScrollTarget(label)}
-        />
+        {/* Mobile backdrop */}
+        {isMobile && showSidebar && (
+          <div
+            className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
+            onClick={() => setShowSidebar(false)}
+          />
+        )}
+        <div className={`${isMobile ? 'fixed inset-y-0 left-0 z-40 w-[85vw] max-w-[400px] transition-transform duration-300 ease-out' : 'hidden md:flex'} ${isMobile && !showSidebar ? '-translate-x-full' : 'translate-x-0'}`}>
+          <QuestionsSidebar
+            questions={questions}
+            transcript={transcript}
+            expandedQ={expandedQ}
+            setExpandedQ={setExpandedQ}
+            onFollowUp={followUp}
+            onComposerFill={composerFill}
+            isThinking={isThinking}
+            chatEndRef={chatEndRef}
+            onScrollToQuestion={(label) => setScrollTarget(label)}
+          />
+        </div>
 
         {/* Whiteboard Area (Center/Right) */}
         <div className="flex flex-1 flex-col relative z-10" style={{ background: "var(--bg-base)" }}>
@@ -452,7 +512,7 @@ export default function Home() {
           autoMicEnabled={autoMicEnabled}
           onConnect={connect}
           onDisconnect={disconnect}
-          onSendText={sendText}
+          onSendText={sendTextWithToast}
           onStartTalking={startTalking}
           onStopTalking={stopTalking}
           onToggleAutoMic={toggleAutoMic}

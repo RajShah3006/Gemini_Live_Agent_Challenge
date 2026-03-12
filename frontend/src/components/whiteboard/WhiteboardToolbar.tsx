@@ -170,7 +170,7 @@ function ToolBtn({ children, title, onClick, disabled }: { children: React.React
       aria-label={title}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-7 w-7 items-center justify-center rounded-lg text-sm transition-all hover:bg-white/10 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+      className="flex h-9 w-9 md:h-7 md:w-7 items-center justify-center rounded-lg text-sm transition-all hover:bg-white/10 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
       style={{ color: "var(--text-muted)" }}
     >
       {children}

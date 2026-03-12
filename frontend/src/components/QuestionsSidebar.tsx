@@ -232,7 +232,7 @@ export function QuestionsSidebar({
 
   return (
     <div
-      className="flex w-[400px] flex-col relative z-20 shadow-[1px_0_10px_rgba(0,0,0,0.05)]"
+      className="flex w-full md:w-[400px] h-full flex-col relative z-20 shadow-[1px_0_10px_rgba(0,0,0,0.05)]"
       style={{
         background: "var(--bg-surface)",
         borderRight: "1px solid rgba(148,163,184,0.08)",

@@ -10,7 +10,7 @@
  *  - Page boundary detection for overflow into next page
  */
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, memo } from "react";
 import type { WhiteboardCommand } from "@/lib/types";
 import {
   CONTENT_SIZE, FONT, TEXT_COLOR,
@@ -36,7 +36,7 @@ interface NotebookPageProps {
   accentColor: string;        // Unique color for this page
 }
 
-export function NotebookPage({
+function NotebookPageInner({
   label,
   questionText,
   commands,
@@ -53,11 +53,13 @@ export function NotebookPage({
   const busyRef = useRef(false);
   const maxYRef = useRef(PAGE_PAD_TOP);
   const currentStepRef = useRef(0);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cursor, setCursor] = useState({ x: 0, y: 0, show: false, color: accentColor });
   const [isDrawing, setIsDrawing] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(MIN_CANVAS_H);
   const [hasSolution, setHasSolution] = useState(false);
   const [containerWidth, setContainerWidth] = useState(CANVAS_W);
+  const [contextLost, setContextLost] = useState(false);
 
   /* ── Resize canvas to fit content ── */
   const resizeCanvas = useCallback(() => {
@@ -73,7 +75,12 @@ export function NotebookPage({
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      // Canvas context unavailable (memory pressure) — retry once with tracked timeout
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = setTimeout(() => resizeCanvas(), 100);
+      return;
+    }
     ctx.scale(dpr, dpr);
     clearBoard(ctx, w, h);
     // Redraw all completed commands
@@ -215,16 +222,32 @@ export function NotebookPage({
     drain();
   }, [commands, drain]);
 
-  /* ── Initial canvas setup + track container width ── */
+  /* ── Initial canvas setup + track container width + context loss handling ── */
   useEffect(() => {
     resizeCanvas();
+    const canvas = canvasRef.current;
+    const onContextLost = (e: Event) => {
+      e.preventDefault();
+      setContextLost(true);
+    };
+    const onContextRestored = () => {
+      setContextLost(false);
+      resizeCanvas();
+    };
+    canvas?.addEventListener("contextlost", onContextLost);
+    canvas?.addEventListener("contextrestored", onContextRestored);
     const onResize = () => {
       resizeCanvas();
       if (containerRef.current) setContainerWidth(containerRef.current.clientWidth);
     };
     if (containerRef.current) setContainerWidth(containerRef.current.clientWidth);
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      canvas?.removeEventListener("contextlost", onContextLost);
+      canvas?.removeEventListener("contextrestored", onContextRestored);
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    };
   }, [resizeCanvas]);
 
   const mathExpr = extractMath(questionText);
@@ -263,6 +286,14 @@ export function NotebookPage({
             background: BG,
           }}
         />
+        {contextLost && (
+          <div style={{
+            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.6)", color: "#fbbf24", fontSize: 14, fontWeight: 500,
+          }}>
+            Canvas context lost — recovering…
+          </div>
+        )}
         <WritingHand x={cursor.x * containerWidth / CANVAS_W} y={cursor.y * containerWidth / CANVAS_W} show={cursor.show} glowColor={cursor.color} />
       </div>
 
@@ -279,6 +310,14 @@ export function NotebookPage({
     </div>
   );
 }
+
+// Memoize to prevent re-renders when sibling pages update
+export const NotebookPage = memo(NotebookPageInner, (prev, next) =>
+  prev.commands === next.commands &&
+  prev.isActive === next.isActive &&
+  prev.isThinking === next.isThinking &&
+  prev.accentColor === next.accentColor
+);
 
 /* ── Helper: get Y coordinate from command ── */
 function getCommandY(cmd: WhiteboardCommand): number {
