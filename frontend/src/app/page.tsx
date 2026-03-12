@@ -180,6 +180,7 @@ export default function Home() {
   const [questions, setQuestions] = useState<QuestionInfo[]>([]);
   const [expandedQ, setExpandedQ] = useState<number | null>(null);
   const [composerText, setComposerText] = useState("");
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const toolbarPortalRef = useRef<HTMLDivElement>(null);
@@ -417,6 +418,7 @@ export default function Home() {
           onComposerFill={composerFill}
           isThinking={isThinking}
           chatEndRef={chatEndRef}
+          onScrollToQuestion={(label) => setScrollTarget(label)}
         />
 
         {/* Whiteboard Area (Center/Right) */}
@@ -428,6 +430,7 @@ export default function Home() {
             onQuestionsChange={handleQuestionsChange}
             toolbarPortalRef={toolbarPortalRef}
             voiceCommand={voiceCommand}
+            scrollToLabel={scrollTarget}
           />
         </div>
       </div>

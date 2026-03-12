@@ -22,9 +22,9 @@ import { WritingHand } from "./WritingHand";
 
 /* ═══ Page Config ═══ */
 const PAGE_PAD_TOP = 50;     // top padding (below header)
-const MIN_CANVAS_H = 200;    // minimum canvas height
+const MIN_CANVAS_H = 300;    // minimum canvas height
 const CANVAS_W = 900;        // fixed canvas width (CSS scales it to container)
-const MIN_Y_GAP = 10;        // minimum vertical gap between commands
+const MIN_Y_GAP = 25;        // minimum vertical gap between commands (was 10)
 const MAX_TEXT_WIDTH = CANVAS_W - 80; // max text width before wrapping
 
 interface NotebookPageProps {
@@ -250,7 +250,6 @@ export function NotebookPage({
         style={{
           position: "relative",
           overflow: "auto",
-          maxHeight: 600,
           scrollbarWidth: "thin",
           scrollbarColor: "#1e293b #060a10",
         }}
@@ -302,19 +301,19 @@ function getCommandBottom(cmd: WhiteboardCommand): number {
   const y = (p.y as number) || 0;
   switch (cmd.action) {
     case "draw_graph":
-      return y + ((p.height as number) || 350) + 20;
+      return y + ((p.height as number) || 350) + 30;
     case "draw_text":
     case "draw_latex":
-      return y + ((p.size as number) || 34) + 10;
+      return y + ((p.size as number) || 34) + 15;
     case "step_marker":
-      return y + 40;
+      return y + 50; // was 40 — more room after step header
     case "draw_line":
     case "draw_arrow":
-      return Math.max((p.y1 as number) || 0, (p.y2 as number) || 0) + 10;
+      return Math.max((p.y1 as number) || 0, (p.y2 as number) || 0) + 15;
     case "draw_circle":
-      return y + ((p._pillH as number) || ((p.radius as number) || 30) * 2) + 10;
+      return y + ((p._pillH as number) || ((p.radius as number) || 30) * 2) + 15;
     case "highlight":
-      return y + ((p.height as number) || 40) + 10;
+      return y + ((p.height as number) || 40) + 15;
     default:
       return y + 50;
   }

@@ -15,6 +15,7 @@ interface QuestionsSidebarProps {
   onComposerFill: (text: string) => void;
   isThinking: boolean;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
+  onScrollToQuestion?: (label: string) => void;
 }
 
 type QAction = "rename" | "archive" | "delete";
@@ -156,12 +157,32 @@ export function QuestionsSidebar({
   onComposerFill,
   isThinking,
   chatEndRef,
+  onScrollToQuestion,
 }: QuestionsSidebarProps) {
   const [searchFilter, setSearchFilter] = useState("");
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
   const [renames, setRenames] = useState<Record<number, string>>({});
   const [archived, setArchived] = useState<Set<number>>(new Set());
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
+  const [renamingIdx, setRenamingIdx] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus rename input when it appears
+  useEffect(() => {
+    if (renamingIdx !== null) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renamingIdx]);
+
+  const commitRename = useCallback(() => {
+    if (renamingIdx !== null && renameValue.trim()) {
+      setRenames((r) => ({ ...r, [renamingIdx]: renameValue.trim() }));
+    }
+    setRenamingIdx(null);
+    setRenameValue("");
+  }, [renamingIdx, renameValue]);
 
   const handleAction = useCallback(
     (idx: number, action: QAction) => {
@@ -169,8 +190,8 @@ export function QuestionsSidebar({
       switch (action) {
         case "rename": {
           const q = questions.find((q) => q.idx === idx);
-          const name = prompt("Rename question:", renames[idx] || q?.text.slice(0, 60) || "");
-          if (name !== null) setRenames((r) => ({ ...r, [idx]: name }));
+          setRenameValue(renames[idx] || q?.text.slice(0, 60) || "");
+          setRenamingIdx(idx);
           break;
         }
         case "archive":
@@ -347,19 +368,20 @@ export function QuestionsSidebar({
               const statusColor = hasTutorReply
                 ? { bg: "rgba(52,211,153,0.10)", text: "#34d399", dot: "#34d399" }
                 : { bg: "rgba(251,191,36,0.10)", text: "#fbbf24", dot: "#fbbf24" };
+              const isRenaming = renamingIdx === q.idx;
 
               return (
                 <div
                   key={q.idx}
-                  className="group relative rounded-xl overflow-hidden transition-all duration-150"
+                  className="group relative rounded-xl overflow-hidden transition-all duration-200"
                   style={{
                     background: isActive
-                      ? "rgba(99,102,241,0.08)"
+                      ? "rgba(99,102,241,0.10)"
                       : "rgba(15,20,40,0.4)",
                     border: isActive
-                      ? "1px solid rgba(99,102,241,0.3)"
+                      ? "1px solid rgba(99,102,241,0.35)"
                       : "1px solid rgba(148,163,184,0.06)",
-                    boxShadow: isActive ? "0 0 16px rgba(99,102,241,0.08)" : "none",
+                    boxShadow: isActive ? "0 0 20px rgba(99,102,241,0.10), inset 0 1px 0 rgba(255,255,255,0.03)" : "none",
                   }}
                 >
                   {/* Active indicator bar */}
@@ -372,11 +394,16 @@ export function QuestionsSidebar({
 
                   {/* ── Card header (clickable) ── */}
                   <button
-                    onClick={() => setExpandedQ(isActive ? null : q.idx)}
-                    className="focus-ring w-full text-left px-3 py-2.5 transition-colors hover:bg-white/[0.03]"
+                    onClick={() => {
+                      setExpandedQ(isActive ? null : q.idx);
+                      if (!isActive && onScrollToQuestion) {
+                        onScrollToQuestion(q.label);
+                      }
+                    }}
+                    className="focus-ring w-full text-left px-3.5 py-3 transition-colors hover:bg-white/[0.03]"
                   >
-                    {/* Top row: badge + status + menu */}
-                    <div className="flex items-center gap-2 mb-1">
+                    {/* Top row: badge + step count + status + menu */}
+                    <div className="flex items-center gap-2 mb-1.5">
                       <span
                         className="text-[10px] font-bold shrink-0 rounded px-1.5 py-[2px] tracking-wide"
                         style={{
@@ -388,6 +415,15 @@ export function QuestionsSidebar({
                       >
                         {q.label}
                       </span>
+                      {/* Step count badge */}
+                      {q.stepCount > 0 && (
+                        <span
+                          className="text-[9px] font-medium px-1.5 py-[1px] rounded-full"
+                          style={{ background: "rgba(148,163,184,0.08)", color: "var(--text-muted)" }}
+                        >
+                          {q.stepCount} step{q.stepCount !== 1 ? "s" : ""}
+                        </span>
+                      )}
                       <span className="flex-1" />
                       {/* Status badge */}
                       <span
@@ -401,39 +437,52 @@ export function QuestionsSidebar({
                         {statusLabel}
                       </span>
                       {/* Three-dot menu */}
-                      <span
-                        role="button"
-                        tabIndex={0}
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           setMenuOpen(menuOpen === q.idx ? null : q.idx);
                         }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.stopPropagation();
-                            setMenuOpen(menuOpen === q.idx ? null : q.idx);
-                          }
-                        }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-[14px] px-1 rounded hover:bg-white/10 cursor-pointer"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-[14px] px-1 rounded hover:bg-white/10"
                         style={{ color: "var(--text-muted)" }}
                         aria-label="Question actions"
                       >
                         ⋯
-                      </span>
+                      </button>
                     </div>
 
-                    {/* Title */}
-                    <div
-                      className="text-[12px] font-medium leading-snug line-clamp-2"
-                      style={{ color: isActive ? "var(--text-primary)" : "var(--text-secondary)" }}
-                    >
-                      {displayTitle}
-                    </div>
+                    {/* Title (or inline rename input) */}
+                    {isRenaming ? (
+                      <input
+                        ref={renameInputRef}
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename();
+                          if (e.key === "Escape") { setRenamingIdx(null); setRenameValue(""); }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full text-[12px] font-medium rounded px-2 py-1 outline-none"
+                        style={{
+                          background: "var(--bg-elevated)",
+                          color: "var(--text-primary)",
+                          border: "1px solid rgba(99,102,241,0.4)",
+                        }}
+                        maxLength={80}
+                      />
+                    ) : (
+                      <div
+                        className="text-[12.5px] font-medium leading-snug line-clamp-2"
+                        style={{ color: isActive ? "var(--text-primary)" : "var(--text-secondary)" }}
+                      >
+                        {displayTitle}
+                      </div>
+                    )}
 
                     {/* Preview (collapsed only) */}
                     {!isActive && preview && (
                       <div
-                        className="text-[10px] leading-relaxed mt-1 line-clamp-1"
+                        className="text-[10.5px] leading-relaxed mt-1.5 line-clamp-1"
                         style={{ color: "var(--text-muted)" }}
                       >
                         → {preview}
@@ -451,7 +500,7 @@ export function QuestionsSidebar({
 
                   {/* ── Follow-up (hover, collapsed) ── */}
                   {!isActive && (
-                    <div className="px-3 pb-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="px-3.5 pb-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={() => onFollowUp(q.label)}
                         className="focus-ring text-[10px] font-medium transition-colors hover:underline"
@@ -465,7 +514,7 @@ export function QuestionsSidebar({
                   {/* ── Expanded transcript ── */}
                   {isActive && (
                     <div
-                      className="px-3 pb-3 pt-2 space-y-1.5"
+                      className="px-3.5 pb-3 pt-2 space-y-1.5"
                       style={{ borderTop: "1px solid rgba(148,163,184,0.06)" }}
                     >
                       {qTrans.map((msg, mi) => (
@@ -473,7 +522,7 @@ export function QuestionsSidebar({
                       ))}
                       <button
                         onClick={() => onFollowUp(q.label)}
-                        className="focus-ring w-full text-[10px] font-medium py-1.5 rounded-lg transition-colors hover:bg-white/5"
+                        className="focus-ring w-full text-[10px] font-medium py-2 rounded-lg transition-colors hover:bg-white/5"
                         style={{ color: "#818cf8" }}
                       >
                         ↩ Follow up on {q.label}

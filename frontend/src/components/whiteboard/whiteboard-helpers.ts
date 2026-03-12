@@ -268,6 +268,34 @@ export function drawGraphAxes(
   const ox = mapX(0), oy = mapY(0);
   ctx.lineCap = "round";
   ctx.shadowBlur = 0;
+
+  // Graph area background (subtle contrast from page BG)
+  ctx.fillStyle = "rgba(15,23,42,0.4)";
+  ctx.fillRect(gx, gy, gw, gh);
+
+  // Subtle grid lines at tick positions (Desmos-style)
+  const xStep = niceStep(xMax - xMin);
+  const yStep = niceStep(yMax - yMin);
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,0.06)";
+  ctx.lineWidth = 0.5;
+  for (let v = Math.ceil(xMin / xStep) * xStep; v <= xMax; v += xStep) {
+    if (Math.abs(v) < xStep * 0.01) continue;
+    const px = mapX(v);
+    ctx.beginPath(); ctx.moveTo(px, gy); ctx.lineTo(px, gy + gh); ctx.stroke();
+  }
+  for (let v = Math.ceil(yMin / yStep) * yStep; v <= yMax; v += yStep) {
+    if (Math.abs(v) < yStep * 0.01) continue;
+    const py = mapY(v);
+    ctx.beginPath(); ctx.moveTo(gx, py); ctx.lineTo(gx + gw, py); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Graph border
+  ctx.strokeStyle = "rgba(148,163,184,0.12)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(gx, gy, gw, gh);
+
   if (yMin <= 0 && yMax >= 0) {
     ctx.beginPath(); ctx.moveTo(gx, oy); ctx.lineTo(gx + gw, oy);
     markerStroke(ctx, AXIS_COLOR, 1.5);
@@ -284,8 +312,6 @@ export function drawGraphAxes(
     ctx.lineTo(ox + 4, gy + 8);
     markerStroke(ctx, AXIS_COLOR, 1.5);
   }
-  const xStep = niceStep(xMax - xMin);
-  const yStep = niceStep(yMax - yMin);
   ctx.font = `${LABEL_SIZE}px ${FONT}`;
   ctx.fillStyle = TICK_COLOR;
   ctx.textAlign = "center";
@@ -322,23 +348,33 @@ export function drawGraphCurve(
 ) {
   const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
   const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
-  const SAMPLES = 300;
+  const SAMPLES = 400;
   const dx = (xMax - xMin) / SAMPLES;
+  ctx.save();
+  // Clip to graph area for clean boundaries
+  ctx.beginPath();
+  ctx.rect(gx - 1, gy - 1, gw + 2, gh + 2);
+  ctx.clip();
   ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.beginPath();
   let penDown = false;
   for (let i = 0; i <= SAMPLES; i++) {
     const xv = xMin + i * dx;
     const yv = evalMathFn(fn, xv);
-    if (isNaN(yv) || yv < yMin - 5 || yv > yMax + 5) { penDown = false; continue; }
+    if (isNaN(yv)) { penDown = false; continue; }
+    // Wider tolerance for vertical asymptotes
+    const prevYv = i > 0 ? evalMathFn(fn, xMin + (i - 1) * dx) : yv;
+    if (Math.abs(yv - prevYv) > (yMax - yMin) * 2) { penDown = false; continue; }
     const px = mapX(xv), py = mapY(yv);
     if (!penDown) { ctx.moveTo(px, py); penDown = true; }
     else ctx.lineTo(px, py);
   }
+  // Glow layer
   ctx.shadowColor = color;
-  ctx.shadowBlur = 6;
-  markerStroke(ctx, color, 3);
+  ctx.shadowBlur = 8;
+  markerStroke(ctx, color, 3.5);
   ctx.shadowBlur = 0;
+  ctx.restore();
 }
 
 export function drawGraphLabel(
@@ -512,27 +548,42 @@ export function animateCmd(
 
       case "step_marker": {
         const sx = p.x as number, sy = p.y as number;
-        const label = `Step ${p.step as number}`;
+        const stepNum = p.step as number;
+        const label = `Step ${stepNum}`;
+        const stepColor = getStepColor(stepNum);
         ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
         const fullW = ctx.measureText(label).width;
-        if ((p.step as number) > 1) {
+        // Full-width divider (steps 2+)
+        if (stepNum > 1) {
           ctx.shadowBlur = 0;
           ctx.beginPath();
-          ctx.moveTo(sx, sy - 18);
-          ctx.lineTo(sx + 300, sy - 18);
-          markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
+          ctx.moveTo(20, sy - 22);
+          ctx.lineTo(860, sy - 22);
+          markerStroke(ctx, "rgba(148,163,184,0.10)", 1);
         }
+        // Left accent bar
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(94,234,212,0.12)";
+        ctx.fillStyle = stepColor;
+        ctx.fillRect(sx - 14, sy - CONTENT_SIZE + 2, 4, CONTENT_SIZE + 8);
+        // Step badge background
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = stepColor;
         ctx.beginPath();
-        ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 6);
+        ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 8);
         ctx.fill();
+        ctx.globalAlpha = 0.25;
+        ctx.strokeStyle = stepColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+        // Animate text
         let i = 0;
         const tick = () => {
           if (i >= label.length) { resolve(); return; }
           const xOff = ctx.measureText(label.slice(0, i)).width;
-          markerText(ctx, label[i], sx + xOff, sy, STEP_LABEL_COLOR, CONTENT_SIZE, true);
-          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: STEP_LABEL_COLOR });
+          markerText(ctx, label[i], sx + xOff, sy, stepColor, CONTENT_SIZE, true);
+          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: stepColor });
           i++;
           setTimeout(tick, 28);
         };
@@ -552,7 +603,7 @@ export function animateCmd(
 
         const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
         const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
-        const SAMPLES = 300;
+        const SAMPLES = 400;
         const dx = (xMax - xMin) / SAMPLES;
         const CURVE_DURATION = 2000;
         const t0 = performance.now();
@@ -560,9 +611,20 @@ export function animateCmd(
         for (let si = 0; si <= SAMPLES; si++) {
           const xv = xMin + si * dx;
           const yv = evalMathFn(fn, xv);
-          const valid = !isNaN(yv) && yv >= yMin - 5 && yv <= yMax + 5;
-          points.push({ px: valid ? mapX(xv) : 0, py: valid ? mapY(yv) : 0, valid });
+          const valid = !isNaN(yv);
+          // Check for asymptotes (large jumps between adjacent points)
+          let isAsymptote = false;
+          if (valid && si > 0) {
+            const prevYv = evalMathFn(fn, xMin + (si - 1) * dx);
+            if (!isNaN(prevYv) && Math.abs(yv - prevYv) > (yMax - yMin) * 2) isAsymptote = true;
+          }
+          points.push({ px: valid ? mapX(xv) : 0, py: valid ? mapY(yv) : 0, valid: valid && !isAsymptote });
         }
+        // Clip animation to graph area
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(gx - 1, gy - 1, gw + 2, gh + 2);
+        ctx.clip();
         let lastDrawn = 0;
         const animStep = () => {
           const elapsed = performance.now() - t0;
@@ -577,7 +639,10 @@ export function animateCmd(
             if (!penDown) { ctx.moveTo(points[si].px, points[si].py); penDown = true; }
             else ctx.lineTo(points[si].px, points[si].py);
           }
-          markerStroke(ctx, sc, 2.5);
+          ctx.shadowColor = sc;
+          ctx.shadowBlur = 6;
+          markerStroke(ctx, sc, 3.5);
+          ctx.shadowBlur = 0;
           if (points[targetIdx]?.valid) {
             setCursor({ x: points[targetIdx].px, y: points[targetIdx].py, show: true, color: sc });
           }
@@ -585,6 +650,7 @@ export function animateCmd(
           if (progress < 1) {
             requestAnimationFrame(animStep);
           } else {
+            ctx.restore();
             setCursor(c => ({ ...c, show: false }));
             resolve();
           }
@@ -667,22 +733,33 @@ export function drawInstant(
       break;
     case "step_marker": {
       const sx = p.x as number, sy = p.y as number;
-      const label = `Step ${p.step as number}`;
+      const stepNum = p.step as number;
+      const label = `Step ${stepNum}`;
+      const stepColor = getStepColor(stepNum);
       ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
       const fullW = ctx.measureText(label).width;
-      if ((p.step as number) > 1) {
+      if (stepNum > 1) {
         ctx.shadowBlur = 0;
         ctx.beginPath();
-        ctx.moveTo(sx, sy - 18);
-        ctx.lineTo(sx + 300, sy - 18);
-        markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
+        ctx.moveTo(20, sy - 22);
+        ctx.lineTo(860, sy - 22);
+        markerStroke(ctx, "rgba(148,163,184,0.10)", 1);
       }
       ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(94,234,212,0.12)";
+      ctx.fillStyle = stepColor;
+      ctx.fillRect(sx - 14, sy - CONTENT_SIZE + 2, 4, CONTENT_SIZE + 8);
+      ctx.save();
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = stepColor;
       ctx.beginPath();
-      ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 6);
+      ctx.roundRect(sx - 6, sy - CONTENT_SIZE + 2, fullW + 16, CONTENT_SIZE + 8, 8);
       ctx.fill();
-      markerText(ctx, label, sx, sy, STEP_LABEL_COLOR, CONTENT_SIZE, true);
+      ctx.globalAlpha = 0.25;
+      ctx.strokeStyle = stepColor;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+      markerText(ctx, label, sx, sy, stepColor, CONTENT_SIZE, true);
       break;
     }
     case "question_header": {

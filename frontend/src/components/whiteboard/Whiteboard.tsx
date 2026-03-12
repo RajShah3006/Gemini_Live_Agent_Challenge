@@ -27,6 +27,7 @@ export interface QuestionInfo {
   text: string;
   idx: number;
   yStart: number;
+  stepCount: number;
 }
 
 interface Page {
@@ -46,6 +47,7 @@ interface WhiteboardProps {
   onQuestionsChange?: (questions: QuestionInfo[]) => void;
   toolbarPortalRef?: React.RefObject<HTMLDivElement | null>;
   voiceCommand?: { cmd: string; arg?: string } | null;
+  scrollToLabel?: string | null;
 }
 
 /* ═══ Main Whiteboard Orchestrator ═══ */
@@ -57,6 +59,7 @@ export function Whiteboard({
   onQuestionsChange,
   toolbarPortalRef,
   voiceCommand,
+  scrollToLabel,
 }: WhiteboardProps) {
   const [pages, setPages] = useState<Page[]>([]);
   const pagesRef = useRef<Page[]>([]);
@@ -213,6 +216,7 @@ export function Whiteboard({
             text: p.questionText.slice(0, 60),
             idx: i,
             yStart: 0,
+            stepCount: p.commands.filter(c => c.action === "step_marker").length,
           }));
         onQuestionsChange(qs);
       }
@@ -283,6 +287,20 @@ export function Whiteboard({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  /* ── Scroll to question when sidebar navigates ── */
+  useEffect(() => {
+    if (!scrollToLabel) return;
+    const page = pagesRef.current.find(p => p.label === scrollToLabel);
+    if (page) {
+      activePageIdRef.current = page.id;
+      setActivePageId(page.id);
+      const el = pageRefsMap.current.get(page.id);
+      if (el) {
+        setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      }
+    }
+  }, [scrollToLabel]);
 
   /* ── Graph preset handler ── */
   const handleGraphPreset = useCallback((fn: string, label: string) => {
@@ -411,12 +429,24 @@ export function Whiteboard({
         {pages.filter(p => !p.isFollowUp).length > 0 && activePageId && (() => {
           const activePage = pages.find(p => p.id === activePageId);
           if (activePage) {
+            const stepCount = activePage.commands.filter(c => c.action === "step_marker").length;
             return (
-              <div className="sticky top-0 left-0 right-0 z-20 flex justify-center pt-4 pb-8 pointer-events-none bg-gradient-to-b from-[#0b1120] to-transparent">
-                <div className="pointer-events-auto px-6 py-2 rounded-full shadow-lg flex items-center gap-3 backdrop-blur-md"
-                     style={{ background: "rgba(15, 23, 42, 0.75)", border: "1px solid rgba(148,163,184,0.1)" }}>
-                  <span className="text-[11px] font-bold tracking-wider" style={{ color: activePage.accentColor }}>{activePage.label}</span>
-                  <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>{activePage.questionText}</span>
+              <div className="sticky top-0 left-0 right-0 z-20 flex justify-center pt-4 pb-8 pointer-events-none bg-gradient-to-b from-[#0b1120] via-[#0b1120]/80 to-transparent">
+                <div className="pointer-events-auto px-5 py-2.5 rounded-2xl shadow-lg flex items-center gap-3 backdrop-blur-md"
+                     style={{ background: "rgba(15, 23, 42, 0.80)", border: "1px solid rgba(148,163,184,0.12)" }}>
+                  <span className="text-[11px] font-bold tracking-wider px-2 py-0.5 rounded-md"
+                    style={{ color: activePage.accentColor, background: `${activePage.accentColor}18` }}>
+                    {activePage.label}
+                  </span>
+                  <span className="text-[13px] font-medium leading-snug max-w-[400px] truncate" style={{ color: "var(--text-primary)" }}>
+                    {activePage.questionText}
+                  </span>
+                  {stepCount > 0 && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                      style={{ background: "rgba(148,163,184,0.08)", color: "var(--text-muted)" }}>
+                      {stepCount} step{stepCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
                 </div>
               </div>
             );
@@ -537,9 +567,9 @@ function getNextY(commands: WhiteboardCommand[]): number {
     let bottom = 0;
     if (p.y !== undefined) {
       const y = p.y as number;
-      if (cmd.action === "draw_graph") bottom = y + ((p.height as number) || 350) + 20;
-      else if (cmd.action === "draw_text" || cmd.action === "draw_latex") bottom = y + ((p.size as number) || 34) + 10;
-      else if (cmd.action === "step_marker") bottom = y + 40;
+      if (cmd.action === "draw_graph") bottom = y + ((p.height as number) || 350) + 30;
+      else if (cmd.action === "draw_text" || cmd.action === "draw_latex") bottom = y + ((p.size as number) || 34) + 15;
+      else if (cmd.action === "step_marker") bottom = y + 50;
       else bottom = y + 50;
     } else if (p.y1 !== undefined) {
       bottom = Math.max(p.y1 as number, p.y2 as number) + 20;
