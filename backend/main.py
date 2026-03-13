@@ -1,9 +1,26 @@
+"""
+MathBoard Backend — FastAPI application entry point.
+
+Endpoints:
+  - WebSocket /ws/session — Main bidirectional channel for voice, text, images, whiteboard
+  - GET /api/sessions      — List saved sessions from Firestore
+  - GET /api/sessions/{id} — Get session detail with messages
+  - GET /health            — Health check
+  - GET /                  — Root info
+
+The WebSocket handler orchestrates GeminiSession (AI), WhiteboardService (state),
+and SessionService (persistence) for each connected client.
+"""
+
 import asyncio
 import base64
 import binascii
 import json
 import logging
 import os
+import time
+from collections import defaultdict
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,13 +36,24 @@ try:
     cl_client = cloud_logging.Client(project=cfg.GCP_PROJECT_ID or None)
     cl_client.setup_logging(log_level=logging.INFO)
     logging.info("Cloud Logging attached")
-except Exception:
+except Exception as e:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    logging.info("Cloud Logging unavailable, using local logs")
+    logging.warning(f"Cloud Logging unavailable ({e}), using local logs")
 
 logger = logging.getLogger("mathboard")
 
-app = FastAPI(title="MathBoard Backend")
+
+# ── Lifespan: startup/shutdown cleanup ──
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    whiteboard_svc.start_cleanup_loop()
+    yield
+    # Shutdown: close GCP clients
+    whiteboard_svc.close_client()
+    session_svc.close()
+
+
+app = FastAPI(title="MathBoard Backend", lifespan=lifespan)
 
 _cors_raw = os.getenv("CORS_ORIGINS", "")
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else []
@@ -40,6 +68,44 @@ app.add_middleware(
 
 session_svc = SessionService()
 whiteboard_svc = WhiteboardService()
+
+
+# ── Per-session rate limiter ──
+class RateLimiter:
+    """Simple sliding-window rate limiter (per WebSocket session)."""
+    def __init__(self, max_per_minute: int = 30):
+        self._max = max_per_minute
+        self._timestamps: list[float] = []
+
+    def check(self) -> bool:
+        now = time.time()
+        self._timestamps = [t for t in self._timestamps if now - t < 60]
+        if len(self._timestamps) >= self._max:
+            return False
+        self._timestamps.append(now)
+        return True
+
+
+# ── Global IP-based rate limiter ──
+class GlobalRateLimiter:
+    """Sliding-window rate limiter keyed by IP address."""
+    def __init__(self, max_per_minute: int = 120):
+        self._max = max_per_minute
+        self._ips: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, ip: str) -> bool:
+        now = time.time()
+        self._ips[ip] = [t for t in self._ips[ip] if now - t < 60]
+        if len(self._ips[ip]) >= self._max:
+            return False
+        self._ips[ip].append(now)
+        return True
+
+
+_global_limiter = GlobalRateLimiter(max_per_minute=120)
+
+# WebSocket idle timeout (seconds) — close connections idle longer than this
+WS_IDLE_TIMEOUT = 300  # 5 minutes
 
 
 @app.get("/health")
@@ -81,7 +147,7 @@ async def get_session(session_id: str):
 async def export_whiteboard(session_id: str):
     """Upload current whiteboard commands as JSON to Cloud Storage."""
     try:
-        cmds = whiteboard_svc.get_commands(session_id)
+        cmds = await whiteboard_svc.get_commands(session_id)
         if not cmds:
             raise HTTPException(status_code=404, detail="No whiteboard data")
         json_bytes = json.dumps(cmds, indent=2).encode()
@@ -100,6 +166,7 @@ async def export_whiteboard(session_id: str):
 async def websocket_session(ws: WebSocket):
     await ws.accept()
     session_id = None
+    ws_open = True  # set to False as soon as the client socket closes
 
     # Try to create a Firestore session
     try:
@@ -108,24 +175,35 @@ async def websocket_session(ws: WebSocket):
     except Exception as e:
         logger.warning(f"Firestore session create failed (continuing without): {e}")
 
+    async def _send(payload: dict) -> bool:
+        """Send a JSON message to the client. Returns False if the socket is closed."""
+        if not ws_open:
+            return False
+        try:
+            await ws.send_json(payload)
+            return True
+        except Exception:
+            # Client already disconnected — swallow silently
+            return False
+
     async def on_audio(data: bytes):
         """Forward audio from Gemini to the client."""
         encoded = base64.b64encode(data).decode("utf-8") if isinstance(data, bytes) else data
-        await ws.send_json({"type": "audio", "payload": {"data": encoded}})
+        await _send({"type": "audio", "payload": {"data": encoded}})
 
     async def on_whiteboard(cmd: dict):
         """Forward whiteboard commands to the client."""
         if session_id:
-            whiteboard_svc.track_command(session_id, cmd)
-        await ws.send_json({"type": "whiteboard", "payload": cmd})
+            await whiteboard_svc.track_command(session_id, cmd)
+        await _send({"type": "whiteboard", "payload": cmd})
 
     async def on_transcript(role: str, text: str):
         """Forward transcript updates to the client."""
-        await ws.send_json({"type": "transcript", "payload": {"role": role, "text": text}})
+        await _send({"type": "transcript", "payload": {"role": role, "text": text}})
 
     async def on_status(status: dict):
         """Forward status updates to the client."""
-        await ws.send_json({"type": "status", "payload": status})
+        await _send({"type": "status", "payload": status})
 
     session = GeminiSession(
         on_audio=on_audio,
@@ -139,8 +217,40 @@ async def websocket_session(ws: WebSocket):
         # This avoids the native audio model dropping idle connections (1011 error).
         await ws.send_json({"type": "status", "payload": {"connected": True, "session_id": session_id}})
 
+        limiter = RateLimiter(max_per_minute=30)
+        client_ip = ws.client.host if ws.client else "unknown"
+        pending_tasks: set[asyncio.Task] = set()
+
+        def _track_task(task: asyncio.Task):
+            """Track a background task and log errors if it crashes."""
+            pending_tasks.add(task)
+            def _done(t: asyncio.Task):
+                pending_tasks.discard(t)
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc:
+                    logger.error(f"Background task crashed: {exc}", exc_info=exc)
+            task.add_done_callback(_done)
+
         while True:
-            data = await ws.receive_json()
+            try:
+                raw_text = await asyncio.wait_for(ws.receive_text(), timeout=WS_IDLE_TIMEOUT)
+                # Guard against oversized frames (max 10MB)
+                if len(raw_text) > 10_485_760:
+                    logger.warning(f"Oversized WebSocket frame ({len(raw_text)} bytes) — dropping")
+                    await _send({"type": "status", "payload": {"error": "Message too large"}})
+                    continue
+                data = json.loads(raw_text)
+            except asyncio.TimeoutError:
+                logger.info(f"WebSocket idle timeout ({WS_IDLE_TIMEOUT}s) — closing {session_id}")
+                await _send({"type": "status", "payload": {"error": "Session timed out due to inactivity"}})
+                break
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Malformed JSON from client: {e}")
+                await _send({"type": "status", "payload": {"error": "Invalid message format"}})
+                continue
+
             msg_type = data.get("type", "")
             payload = data.get("payload", {})
 
@@ -159,27 +269,61 @@ async def websocket_session(ws: WebSocket):
             elif msg_type == "text":
                 text = (payload.get("text", "") or "")[:2000]  # cap at 2000 chars
                 if text:
-                    await session.send_text(text)
-                    # Save user message to Firestore
-                    if session_id:
+                    if not limiter.check() or not _global_limiter.check(client_ip):
+                        await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
+                        continue
+                    async def _handle_text(t_str):
                         try:
-                            await session_svc.save_message(session_id, "user", text)
+                            await session.send_text(t_str)
+                            if session_id:
+                                try:
+                                    await session_svc.save_message(session_id, "user", t_str)
+                                except Exception as e:
+                                    logger.warning(f"Firestore save failed: {e}")
                         except Exception as e:
-                            logger.warning(f"Firestore save failed: {e}")
+                            logger.error(f"Task _handle_text crashed: {e}", exc_info=True)
+                            await _send({"type": "status", "payload": {"error": "Failed to process your question — please try again."}})
+                    _track_task(asyncio.create_task(_handle_text(text)))
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
+                image_text = (payload.get("text", "") or "")[:2000]
                 if len(image_data) > 10_000_000:  # ~7.5 MB decoded
                     logger.warning("Image payload too large — skipping")
                     await ws.send_json({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
                     continue
                 if image_data:
-                    await session.send_image(image_data)
-                    if session_id:
+                    if not limiter.check() or not _global_limiter.check(client_ip):
+                        await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
+                        continue
+                    async def _handle_image(d_b64, t_str):
                         try:
-                            await session_svc.save_message(session_id, "user", "[image uploaded]")
+                            await session.send_image(d_b64, t_str)
+                            if session_id:
+                                try:
+                                    await session_svc.save_message(
+                                        session_id,
+                                        "user",
+                                        t_str if t_str else "[image uploaded]",
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Firestore save failed: {e}")
                         except Exception as e:
-                            logger.warning(f"Firestore save failed: {e}")
+                            logger.error(f"Task _handle_image crashed: {e}", exc_info=True)
+                            await _send({"type": "status", "payload": {"error": "Failed to process your image — please try again."}})
+                    _track_task(asyncio.create_task(_handle_image(image_data, image_text)))
+
+            elif msg_type == "interrupt":
+                async def _handle_interrupt():
+                    try:
+                        await session.interrupt()
+                    except Exception as e:
+                        logger.error(f"Task _handle_interrupt crashed: {e}", exc_info=True)
+                _track_task(asyncio.create_task(_handle_interrupt()))
+
+            elif msg_type == "ping":
+                # [Heartbeat] Respond to client health checks
+                await _send({"type": "pong", "payload": {}})
 
             elif msg_type == "control":
                 action = payload.get("action", "")
@@ -195,10 +339,14 @@ async def websocket_session(ws: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        ws_open = False  # stop all background callbacks from writing to the dead socket
+        # Cancel any in-flight tasks
+        for task in pending_tasks:
+            task.cancel()
         await session.close()
         if session_id:
             try:
                 await session_svc.end_session(session_id)
             except Exception as e:
                 logger.warning(f"Firestore end-session failed: {e}")
-            whiteboard_svc.clear_session(session_id)
+            await whiteboard_svc.clear_session(session_id)

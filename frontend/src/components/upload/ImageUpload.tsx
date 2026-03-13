@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { extractImageFileFromClipboard, readImageFileAsDataUrl } from "@/lib/imageUpload";
 
 interface ImageUploadProps {
   onUpload: (base64: string) => void;
@@ -13,26 +14,14 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-
   const processFile = useCallback(
-    (file: File) => {
+    async (file: File) => {
       setError(null);
-      if (!file.type.startsWith("image/")) {
-        setError("Please upload an image file (JPG, PNG, HEIC)");
-        return;
+      try {
+        setPreview(await readImageFileAsDataUrl(file));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to read file");
       }
-      if (file.size > MAX_SIZE) {
-        setError(`Image too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.`);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onerror = () => setError("Failed to read file");
-      reader.onload = (e) => {
-        const result = e.target?.result as string;
-        setPreview(result);
-      };
-      reader.readAsDataURL(file);
     },
     [],
   );
@@ -49,13 +38,10 @@ export function ImageUpload({ onUpload, onCancel }: ImageUploadProps) {
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
-      const items = e.clipboardData.items;
-      for (const item of items) {
-        if (item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) processFile(file);
-          break;
-        }
+      const file = extractImageFileFromClipboard(e.clipboardData.items);
+      if (file) {
+        e.preventDefault();
+        processFile(file);
       }
     },
     [processFile],

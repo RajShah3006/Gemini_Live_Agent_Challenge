@@ -5,7 +5,7 @@
  * Run: node frontend/tests/test_eval_security.js
  */
 
-const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t\n\r]*$/;
+const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t]*$/;
 const SAFE_FUNCS = [
   "Math.sin","Math.cos","Math.tan","Math.abs","Math.sqrt","Math.log","Math.log2","Math.log10",
   "Math.exp","Math.pow","Math.floor","Math.ceil","Math.round","Math.min","Math.max",

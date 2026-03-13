@@ -3,11 +3,166 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Whiteboard, type QuestionInfo } from "@/components/whiteboard/Whiteboard";
 import { VoicePanel } from "@/components/voice/VoicePanel";
-import { ImageUpload } from "@/components/upload/ImageUpload";
 import { SessionHistory } from "@/components/SessionHistory";
 import { FormulaSheet } from "@/components/FormulaSheet";
 import { HandwritingCanvas } from "@/components/HandwritingCanvas";
+import { QuestionsSidebar } from "@/components/QuestionsSidebar";
 import { useSession } from "@/hooks/useSession";
+import type { WhiteboardCommand, TranscriptEntry } from "@/lib/types";
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  return isMobile;
+}
+
+interface NotebookPage {
+  id: string;
+  title: string;
+  transcript: TranscriptEntry[];
+  whiteboardCommands: WhiteboardCommand[];
+  questions: QuestionInfo[];
+}
+
+function ChatMessageItem({ msg, onFollowUp }: { msg: { text: string; role: "user" | "tutor" | "system" }, onFollowUp?: (topic: string) => void }) {
+  const isUser = msg.role === "user";
+
+  const renderFormattedText = (rawText: string) => {
+    if (isUser) return rawText;
+
+    // Split by Recap to add the top border
+    const recapSplit = rawText.split(/(?=\*\*Recap:\*\*|Recap:|\*\*Summary:\*\*|Summary:)/i);
+
+    return (
+      <>
+        {recapSplit.map((section, sIdx) => {
+          const lowerSection = section.toLowerCase();
+          const isRecap = lowerSection.startsWith('**recap:**') || lowerSection.startsWith('recap:') || 
+                          lowerSection.startsWith('**summary:**') || lowerSection.startsWith('summary:');
+          
+          const parts = section.split(/(`[^`]+`)/);
+          
+          return (
+            <div key={sIdx} className={isRecap && sIdx > 0 ? "mt-4 pt-4 border-t border-white/10" : ""}>
+              {parts.map((part, i) => {
+                if (part.startsWith('`') && part.endsWith('`')) {
+                  return (
+                    <code
+                      key={i}
+                      className="px-1.5 py-[1px] rounded mx-0.5 font-mono inline-block my-0.5"
+                      style={{ background: "var(--bg-bubble-ai-math)", fontSize: "1.05em" }}
+                    >
+                      {part.slice(1, -1)}
+                    </code>
+                  );
+                }
+                
+                // Bold Step X:
+                const stepParts = part.split(/(Step \d+:|\*\*Step \d+:\*\*)/gi);
+                return (
+                  <span key={i}>
+                    {stepParts.map((sp, j) => {
+                      if (/^(?:\*\*)?Step \d+:(?:\*\*)?$/i.test(sp)) {
+                        return (
+                          <span key={j} className="font-semibold block mt-3 mb-1" style={{ color: "var(--accent)" }}>
+                            {sp.replace(/\*\*/g, '')}
+                          </span>
+                        );
+                      }
+                      return sp.replace(/\*\*/g, '');
+                    })}
+                  </span>
+                );
+              })}
+            </div>
+          );
+        })}
+      </>
+    );
+  };
+
+  return (
+    <div className={`flex w-full mb-4 ${isUser ? "justify-end" : "justify-start"} group`}>
+      <div className={`flex flex-col ${isUser ? "items-end" : "items-start"} max-w-[85%]`}>
+        <div
+          className={`whitespace-pre-wrap ${isUser ? "" : "shadow-sm"}`}
+          style={{
+            background: isUser ? "var(--bg-bubble-user)" : "var(--bg-bubble-ai)",
+            color: "var(--text-primary)",
+            borderLeft: isUser ? "none" : "3px solid var(--accent)",
+            borderBottomRightRadius: isUser ? "0px" : "16px",
+            borderBottomLeftRadius: isUser ? "16px" : "0px",
+            borderTopLeftRadius: "16px",
+            borderTopRightRadius: "16px",
+            padding: isUser ? "12px 16px" : "16px 20px",
+            fontSize: "15px",
+            lineHeight: isUser ? "1.5" : "1.7"
+          }}
+        >
+          {!isUser && (
+            <span className="text-[10px] font-bold uppercase tracking-wider opacity-40 block mb-2">
+              MathBoard
+            </span>
+          )}
+          {renderFormattedText(msg.text)}
+        </div>
+        {!isUser && (
+          <div className="flex items-center gap-2 mt-2 ml-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex-wrap">
+            <button className="focus-ring text-[11px] px-2 py-0.5 rounded transition-all hover:bg-white/10" style={{ color: "var(--text-muted)" }}>👍 Helpful</button>
+            <button className="focus-ring text-[11px] px-2 py-0.5 rounded transition-all hover:bg-white/10" style={{ color: "var(--text-muted)" }}>👎 Confusing</button>
+            {onFollowUp && (
+              <>
+                <div className="w-px h-3 bg-white/10 mx-1"></div>
+                <button onClick={() => onFollowUp("Explain differently")} className="focus-ring text-[11px] px-2 py-0.5 rounded transition-all hover:bg-white/10" style={{ color: "var(--accent-light)", background: "rgba(126,140,255,0.1)" }}>Explain differently</button>
+                <button onClick={() => onFollowUp("Why does this work?")} className="focus-ring text-[11px] px-2 py-0.5 rounded transition-all hover:bg-white/10" style={{ color: "var(--accent-light)", background: "rgba(126,140,255,0.1)" }}>Why does this work?</button>
+                <button onClick={() => onFollowUp("Show step breakdown")} className="focus-ring text-[11px] px-2 py-0.5 rounded transition-all hover:bg-white/10" style={{ color: "var(--accent-light)", background: "rgba(126,140,255,0.1)" }}>Step breakdown</button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ThinkingIndicator() {
+  const [stage, setStage] = useState(0);
+  const stages = [
+    { text: "Your math teacher is reading...", icon: "👀" },
+    { text: "Your math teacher is calculating...", icon: "🧮" },
+    { text: "Your math teacher is drawing...", icon: "✍️" }
+  ];
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setStage(s => (s + 1) % stages.length);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 transition-all duration-300"
+      style={{
+        background: "rgba(99,102,241,0.06)",
+        border: "1px solid rgba(99,102,241,0.12)",
+      }}>
+      <span className="text-sm scale-110">{stages[stage].icon}</span>
+      <span className="text-[11px] font-medium opacity-90 transition-opacity duration-300" style={{ color: "#a5b4fc" }}>
+        {stages[stage].text}
+      </span>
+      <span className="flex gap-0.5 ml-auto opacity-75">
+        <span className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "#818cf8", animationDelay: "0ms" }} />
+        <span className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "#818cf8", animationDelay: "150ms" }} />
+        <span className="h-1.5 w-1.5 rounded-full animate-bounce" style={{ background: "#818cf8", animationDelay: "300ms" }} />
+      </span>
+    </div>
+  );
+}
 
 export default function Home() {
   const {
@@ -19,68 +174,158 @@ export default function Home() {
     errorMessage,
     connect,
     disconnect,
-    sendImage,
     sendText,
     startTalking,
     stopTalking,
+    interrupt,
     whiteboardCommands,
+    setWhiteboardCommands,
     transcript,
+    setTranscript,
     voiceCommand,
+    autoMicEnabled,
+    toggleAutoMic,
   } = useSession();
 
-  const [showUpload, setShowUpload] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [questions, setQuestions] = useState<QuestionInfo[]>([]);
   const [expandedQ, setExpandedQ] = useState<number | null>(null);
-  const [searchFilter, setSearchFilter] = useState("");
+  const [composerText, setComposerText] = useState("");
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [sentToast, setSentToast] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
   const toolbarPortalRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+
+  const [pages, setPages] = useState<NotebookPage[]>([
+    { id: "page-1", title: "Page 1", transcript: [], whiteboardCommands: [], questions: [] }
+  ]);
+  const [activePageId, setActivePageId] = useState("page-1");
+
+  const switchPage = useCallback((newId: string) => {
+    // Save current page state, then load the target page — all via functional setState
+    setPages(prev => {
+      const updated = prev.map(p =>
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+      );
+      const newPage = updated.find(p => p.id === newId);
+      if (newPage) {
+        if (typeof setTranscript === "function") setTranscript(newPage.transcript);
+        if (typeof setWhiteboardCommands === "function") setWhiteboardCommands(newPage.whiteboardCommands);
+        setQuestions(newPage.questions);
+        setActivePageId(newId);
+
+        disconnect();
+        if (isConnected) {
+          setTimeout(() => { try { connect(); } catch (e) { console.error("Reconnect failed:", e); } }, 100);
+        }
+      }
+      return updated;
+    });
+  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
+
+  const addPage = useCallback(() => {
+    setPages(prev => {
+      // Save current page state
+      const updated = prev.map(p =>
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+      );
+      const newId = `page-${Date.now()}`;
+      const newPage: NotebookPage = { id: newId, title: `Page ${updated.length + 1}`, transcript: [], whiteboardCommands: [], questions: [] };
+      if (typeof setTranscript === "function") setTranscript([]);
+      if (typeof setWhiteboardCommands === "function") setWhiteboardCommands([]);
+      setQuestions([]);
+      setActivePageId(newId);
+
+      disconnect();
+      if (isConnected) {
+        setTimeout(() => { try { connect(); } catch (e) { console.error("Reconnect failed:", e); } }, 100);
+      }
+      return [...updated, newPage];
+    });
+  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
   const handleQuestionsChange = useCallback((qs: QuestionInfo[]) => {
     setQuestions(qs);
   }, []);
 
-  const followUp = useCallback((label: string) => {
-    if (textInputRef.current) {
-      textInputRef.current.value = `[${label}] `;
-      textInputRef.current.focus();
+  // Wrap sendText to show feedback toast
+  const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
+    sendText(text, imageBase64);
+    const label = imageBase64 ? "📷 Image sent" : text ? "✅ Sent" : "";
+    if (label) {
+      setSentToast(label);
+      setTimeout(() => setSentToast(null), 1800);
     }
+    if (isMobile) setShowSidebar(false);
+  }, [sendText, isMobile]);
+
+  const followUp = useCallback((label: string) => {
+    setComposerText(`[${label}] `);
+    textInputRef.current?.focus();
+  }, []);
+
+  const composerFill = useCallback((text: string) => {
+    setComposerText(text);
+    textInputRef.current?.focus();
   }, []);
 
   const handleHandwritingSubmit = useCallback((blob: Blob) => {
     const reader = new FileReader();
     reader.onload = () => {
       const b64 = (reader.result as string).split(",")[1];
-      if (b64) sendImage(b64);
+      if (b64) sendTextWithToast("", b64);
+    };
+    reader.onerror = () => {
+      console.error("Failed to read handwriting data");
     };
     reader.readAsDataURL(blob);
-  }, [sendImage]);
+  }, [sendTextWithToast]);
 
   // Escape key closes panels
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (showHistory) setShowHistory(false);
-        if (showUpload) setShowUpload(false);
+        if (showSidebar) setShowSidebar(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showHistory, showUpload]);
+  }, [showHistory]);
 
-  // Auto-scroll transcript
+  // Auto-scroll and auto-focus transcript
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcript]);
+    if (!isSpeaking) {
+      textInputRef.current?.focus();
+    }
+  }, [transcript, isSpeaking]);
+
+  useEffect(() => {
+    // Focus on mount after a tiny delay to ensure render
+    setTimeout(() => textInputRef.current?.focus(), 100);
+  }, []);
 
   return (
     <main className="flex h-screen flex-col" style={{ background: "var(--bg-base)" }}>
       {/* ── Error Toast ── */}
       {errorMessage && (
-        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-5 py-3 text-sm font-medium shadow-lg"
-          style={{ background: "var(--danger)", color: "#fff", maxWidth: "90vw" }}>
+        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-5 py-3 text-sm font-medium shadow-lg cursor-pointer"
+          style={{ background: "var(--danger)", color: "#fff", maxWidth: "90vw" }}
+          onClick={() => {/* error is auto-dismissed, but click provides feedback */}}
+          role="alert"
+        >
           {errorMessage}
+        </div>
+      )}
+      {/* ── Sent Toast ── */}
+      {sentToast && (
+        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-4 py-2 text-[12px] font-medium shadow-lg pointer-events-none"
+          style={{ background: "rgba(52,211,153,0.15)", color: "var(--success)", border: "1px solid rgba(52,211,153,0.3)", backdropFilter: "blur(8px)" }}>
+          {sentToast}
         </div>
       )}
       {/* ── Header ── */}
@@ -91,37 +336,61 @@ export default function Home() {
           borderBottom: "1px solid var(--border)",
         }}
       >
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
-            style={{ background: "var(--accent)" }}>
-            M
+        <div className="flex items-center gap-6">
+          {/* Mobile hamburger */}
+          <button
+            className="md:hidden focus-ring flex h-8 w-8 items-center justify-center rounded-lg text-lg transition-colors hover:bg-white/5"
+            style={{ color: "var(--text-secondary)" }}
+            onClick={() => setShowSidebar(!showSidebar)}
+            aria-label="Toggle questions panel"
+          >
+            {showSidebar ? "✕" : "☰"}
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
+              style={{ background: "var(--accent)" }}>
+              M
+            </div>
+            <div>
+              <h1 className="text-sm font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>MathBoard</h1>
+              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>AI Math Tutor</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-sm font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>MathBoard</h1>
-            <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>AI Math Tutor</p>
+
+          <div className="hidden sm:block h-6 w-px mx-2" style={{ background: "var(--border)" }} />
+
+          {/* ── Tabs UI ── */}
+          <div className="flex items-center gap-1 overflow-x-auto hide-scrollbar max-w-[300px]">
+            {pages.map((p, idx) => (
+              <button
+                key={p.id}
+                onClick={() => switchPage(p.id)}
+                className="focus-ring px-3 py-1.5 text-[11px] font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap"
+                style={{
+                  background: p.id === activePageId ? "rgba(91,107,248,0.15)" : "transparent",
+                  color: p.id === activePageId ? "var(--accent)" : "var(--text-muted)",
+                  border: `1px solid ${p.id === activePageId ? "rgba(91,107,248,0.2)" : "transparent"}`,
+                }}
+              >
+                <span className="opacity-70">📓</span> {p.title}
+              </button>
+            ))}
+            <button
+              onClick={addPage}
+              className="focus-ring px-2 py-1 text-[13px] ml-1 rounded-md transition-all hover:bg-white/5 flex shrink-0"
+              style={{ color: "var(--text-muted)" }}
+              title="New Page"
+            >
+              +
+            </button>
           </div>
         </div>
 
         {/* Toolbar portal — whiteboard tools render here */}
-        <div ref={toolbarPortalRef} id="toolbar-portal" className="flex items-center gap-2" />
+        <div ref={toolbarPortalRef} id="toolbar-portal" className="flex items-center gap-2 flex-1 justify-center" />
 
         <div className="flex items-center gap-2">
-          <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
-          <FormulaSheet onInsert={(formula) => {
-            if (textInputRef.current) {
-              textInputRef.current.value += formula;
-              textInputRef.current.focus();
-            }
-          }} />
-          <button
-            onClick={() => setShowHistory(true)}
-            className="rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-white/5"
-            style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-            title="Session History"
-            aria-label="Open session history"
-          >
-            📚 History
-          </button>
+
           <span
             className="group inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium relative cursor-default"
             style={{
@@ -161,16 +430,59 @@ export default function Home() {
             <>
               <span className="h-2 w-2 rounded-full" style={{ background: "#f87171" }} />
               Connection lost
-              <button onClick={connect} className="ml-2 underline hover:no-underline">Retry</button>
+              <button onClick={connect} className="focus-ring ml-2 underline hover:no-underline">Retry</button>
             </>
           )}
         </div>
       )}
 
       {/* ── Main Area ── */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Whiteboard */}
-        <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Secondary Floating Tools Menu (Right Edge) */}
+        <div className="absolute right-2 md:right-4 top-2 md:top-4 z-30 flex flex-col gap-2">
+          <div className="flex flex-col items-center gap-2 rounded-xl p-2 shadow-sm"
+               style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
+            <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
+            <FormulaSheet onInsert={(formula) => {
+              setComposerText((prev) => `${prev}${formula}`);
+              textInputRef.current?.focus();
+            }} />
+            <button
+              onClick={() => setShowHistory(true)}
+              className="focus-ring flex h-[34px] w-[34px] items-center justify-center rounded-lg text-lg transition-colors hover:bg-white/5"
+              style={{ color: "var(--text-secondary)" }}
+              title="Session History"
+              aria-label="Open session history"
+            >
+              📚
+            </button>
+          </div>
+        </div>
+
+        {/* ── Left Panel: Questions & Transcript ── */}
+        {/* Mobile backdrop */}
+        {isMobile && showSidebar && (
+          <div
+            className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
+            onClick={() => setShowSidebar(false)}
+          />
+        )}
+        <div className={`${isMobile ? 'fixed inset-y-0 left-0 z-40 w-[85vw] max-w-[400px] transition-transform duration-300 ease-out' : 'hidden md:flex'} ${isMobile && !showSidebar ? '-translate-x-full' : 'translate-x-0'}`}>
+          <QuestionsSidebar
+            questions={questions}
+            transcript={transcript}
+            expandedQ={expandedQ}
+            setExpandedQ={setExpandedQ}
+            onFollowUp={followUp}
+            onComposerFill={composerFill}
+            isThinking={isThinking}
+            chatEndRef={chatEndRef}
+            onScrollToQuestion={(label) => setScrollTarget(label)}
+          />
+        </div>
+
+        {/* Whiteboard Area (Center/Right) */}
+        <div className="flex flex-1 flex-col relative z-10" style={{ background: "var(--bg-base)" }}>
           <Whiteboard
             commands={whiteboardCommands}
             isSpeaking={isSpeaking}
@@ -178,206 +490,37 @@ export default function Home() {
             onQuestionsChange={handleQuestionsChange}
             toolbarPortalRef={toolbarPortalRef}
             voiceCommand={voiceCommand}
+            scrollToLabel={scrollTarget}
           />
-        </div>
-
-        {/* ── Right Panel: Questions & Transcript ── */}
-        <div
-          className="flex w-[300px] flex-col"
-          style={{
-            background: "var(--bg-surface)",
-            borderLeft: "1px solid rgba(148,163,184,0.06)",
-          }}
-        >
-          {/* Panel header with search */}
-          <div className="px-4 py-3" style={{ borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-                Questions
-              </h3>
-              {questions.length > 0 && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-                  style={{ background: "rgba(99,102,241,0.12)", color: "#a5b4fc" }}>
-                  {questions.length}
-                </span>
-              )}
-            </div>
-            {(transcript.length > 4 || questions.length > 3) && (
-              <input
-                type="text"
-                placeholder="Search questions..."
-                value={searchFilter}
-                onChange={e => setSearchFilter(e.target.value)}
-                className="w-full rounded-lg px-2.5 py-1.5 text-[11px] outline-none"
-                style={{
-                  background: "var(--bg-elevated)",
-                  color: "var(--text-primary)",
-                  border: "1px solid rgba(148,163,184,0.06)",
-                }}
-              />
-            )}
-          </div>
-
-          {/* Collapsible question groups */}
-          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-            {questions.length === 0 && transcript.length === 0 ? (
-              <div className="flex h-full items-center justify-center">
-                <p className="text-center text-xs px-4" style={{ color: "var(--text-muted)" }}>
-                  Ask a question to get started. Hold <kbd className="rounded px-1 py-0.5 text-[10px] font-mono" style={{ border: "1px solid rgba(148,163,184,0.08)" }}>Space</kbd> or type below.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Question cards with transcript grouped under them */}
-                {questions.filter(q => !searchFilter || q.text.toLowerCase().includes(searchFilter.toLowerCase())).map((q, qi) => {
-                  const isExpanded = expandedQ === q.idx;
-                  // Group transcript: find user message matching this question, then tutor replies until next user message
-                  const userIdx = transcript.findIndex(t => t.role === "user" && q.text && t.text.includes(q.text.slice(0, 20)));
-                  const nextUserIdx = userIdx >= 0 ? transcript.findIndex((t, i) => i > userIdx && t.role === "user") : -1;
-                  const endIdx = nextUserIdx >= 0 ? nextUserIdx : transcript.length;
-                  const qTranscript = userIdx >= 0 ? transcript.slice(userIdx, endIdx) : [];
-                  const hasTutorReply = qTranscript.some(t => t.role === "tutor");
-                  const tutorReply = qTranscript.find(t => t.role === "tutor");
-                  const answerPreview = tutorReply ? tutorReply.text.slice(0, 60) + (tutorReply.text.length > 60 ? "…" : "") : "";
-                  return (
-                    <div key={q.idx} className="group rounded-xl overflow-hidden"
-                      style={{
-                        background: "rgba(15,20,40,0.5)",
-                        border: "1px solid rgba(148,163,184,0.06)",
-                      }}>
-                      <button
-                        onClick={() => setExpandedQ(isExpanded ? null : q.idx)}
-                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.03]"
-                      >
-                        <span className="text-[11px] font-bold shrink-0 rounded px-1.5 py-0.5"
-                          style={{ background: "rgba(99,102,241,0.15)", color: "#818cf8" }}>
-                          {q.label}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[12px] truncate block" style={{ color: "var(--text-primary)" }}>
-                            {q.text}
-                          </span>
-                          {answerPreview && !isExpanded && (
-                            <span className="text-[10px] truncate block mt-0.5" style={{ color: "var(--text-muted)" }}>
-                              → {answerPreview}
-                            </span>
-                          )}
-                        </div>
-                        {hasTutorReply ? (
-                          <span className="text-[9px] shrink-0 px-1.5 py-0.5 rounded-full font-medium"
-                            style={{ background: "rgba(52,211,153,0.12)", color: "#34d399" }}>
-                            ✓ Solved
-                          </span>
-                        ) : (
-                          <span className="text-[9px] shrink-0 px-1.5 py-0.5 rounded-full font-medium"
-                            style={{ background: "rgba(251,191,36,0.12)", color: "#fbbf24" }}>
-                            ⏳
-                          </span>
-                        )}
-                        <span className="text-[10px] transition-transform" style={{
-                          color: "var(--text-muted)",
-                          transform: isExpanded ? "rotate(180deg)" : "rotate(0)",
-                        }}>▾</span>
-                      </button>
-                      {/* Follow-up link visible on hover for all questions */}
-                      {!isExpanded && (
-                        <div className="px-3 pb-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => followUp(q.label)}
-                            className="text-[10px] font-medium transition-colors hover:underline"
-                            style={{ color: "#818cf8" }}>
-                            ↩ Follow up
-                          </button>
-                        </div>
-                      )}
-                      <div className={isExpanded ? "q-expand-active" : "q-expand-enter"}>
-                        {isExpanded && (
-                        <div className="px-3 pb-2 space-y-1.5" style={{ borderTop: "1px solid rgba(148,163,184,0.04)" }}>
-                          {qTranscript.map((msg, mi) => (
-                            <div key={mi} className="text-[11px] leading-relaxed rounded-lg px-2.5 py-1.5"
-                              style={{
-                                background: msg.role === "user" ? "rgba(99,102,241,0.06)" : "rgba(148,163,184,0.04)",
-                                color: "var(--text-secondary)",
-                              }}>
-                              <span className="text-[9px] font-semibold uppercase opacity-50 mr-1">
-                                {msg.role === "user" ? "You" : "Tutor"}:
-                              </span>
-                              {msg.text.slice(0, 120)}{msg.text.length > 120 ? "…" : ""}
-                            </div>
-                          ))}
-                          <button
-                            onClick={() => followUp(q.label)}
-                            className="w-full text-[10px] font-medium py-1 rounded-md transition-colors hover:bg-white/5"
-                            style={{ color: "#818cf8" }}>
-                            ↩ Follow up on {q.label}
-                          </button>
-                        </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {/* Ungrouped transcript (before any question) */}
-                {transcript.filter(msg =>
-                  searchFilter ? msg.text.toLowerCase().includes(searchFilter.toLowerCase()) : true
-                ).filter((_, i) => questions.length === 0 || i >= questions.length * 2).map((msg, i) => (
-                  <div
-                    key={`t-${i}`}
-                    className="rounded-xl px-3 py-2 text-[12px] leading-relaxed"
-                    style={{
-                      background: msg.role === "user" ? "rgba(99,102,241,0.06)" : "rgba(15,20,40,0.5)",
-                      border: "1px solid rgba(148,163,184,0.06)",
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    <span className="text-[9px] font-semibold uppercase tracking-wider opacity-50 mr-1">
-                      {msg.role === "user" ? "You" : "Tutor"}:
-                    </span>
-                    {msg.text}
-                  </div>
-                ))}
-              </>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Upload area */}
-          {showUpload && (
-            <div className="px-3 pb-3" style={{ borderTop: "1px solid var(--border)" }}>
-              <div className="pt-3">
-                <ImageUpload
-                  onUpload={(base64) => {
-                    sendImage(base64);
-                    setShowUpload(false);
-                  }}
-                  onCancel={() => setShowUpload(false)}
-                />
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
       {/* ── Bottom Control Bar ── */}
       <div
-        className="relative z-10 flex items-center gap-3 px-5 py-3"
+        className="relative z-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 px-5 py-3"
         style={{
           background: "var(--bg-surface)",
           borderTop: "1px solid var(--border)",
+          paddingBottom: "max(12px, env(safe-area-inset-bottom))"
         }}
       >
         <VoicePanel
           isConnected={isConnected}
           isListening={isListening}
           isSpeaking={isSpeaking}
+          isThinking={isThinking}
+          autoMicEnabled={autoMicEnabled}
           onConnect={connect}
           onDisconnect={disconnect}
-          onToggleUpload={() => setShowUpload((v) => !v)}
-          onSendText={sendText}
+          onSendText={sendTextWithToast}
           onStartTalking={startTalking}
           onStopTalking={stopTalking}
+          onToggleAutoMic={toggleAutoMic}
+          onInterrupt={interrupt}
           questions={questions}
           inputRef={textInputRef}
+          textInput={composerText}
+          onTextInputChange={setComposerText}
         />
       </div>
 

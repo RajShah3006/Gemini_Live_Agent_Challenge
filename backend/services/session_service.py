@@ -20,8 +20,17 @@ class SessionService:
 
     def _get_db(self) -> firestore.AsyncClient:
         if self._db is None:
-            self._db = firestore.AsyncClient(project=cfg.GCP_PROJECT_ID or None)
+            self._db = firestore.AsyncClient(
+                project=cfg.GCP_PROJECT_ID or None,
+                database=cfg.FIRESTORE_DATABASE,
+            )
         return self._db
+
+    def close(self):
+        """Close the Firestore client (call on app shutdown)."""
+        if self._db:
+            self._db.close()
+            self._db = None
 
     @property
     def _col(self):

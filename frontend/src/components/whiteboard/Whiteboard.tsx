@@ -1,187 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+/**
+ * Whiteboard — Orchestrator component that manages notebook pages.
+ *
+ * Each user question gets its own NotebookPage (canvas). This component:
+ *  - Routes incoming whiteboard commands to the correct page
+ *  - Splits commands on "question_header" action to create new pages
+ *  - Manages page navigation, scrolling, zoom
+ *  - Hosts the toolbar, graph presets panel, and teacher mascot
+ *  - Handles voice commands (undo, clear, zoom, goto)
+ */
+
+import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { WhiteboardCommand } from "@/lib/types";
-import { WritingHand } from "./WritingHand";
+import { STEP_COLORS } from "./whiteboard-helpers";
+import { NotebookPage } from "./NotebookPage";
 import { TeacherMascot, type MascotState } from "./TeacherMascot";
 import { WhiteboardToolbar } from "./WhiteboardToolbar";
 import { GraphPresets } from "./GraphPresets";
 
-/* ── Lightboard Config ──────────────────────── */
-const CHAR_DELAY = 38;
-const LINE_DURATION = 500;
-const PAUSE_BETWEEN = 250;
-const SHAPE_DURATION = 400;
-const BG = "#0b1120";
-const GRID = "rgba(255,255,255,0.025)";
-const FONT = "'Single Day', 'Segoe Script', cursive";
-const CONTENT_SIZE = 24;  // single font size for all board content
-// Clean marker palette — visible on dark bg, no neon
-const TEXT_COLOR = "#e2e8f0";      // white-ish for plain text
-const LINE_COLOR = "#94a3b8";      // soft gray for lines/dividers
-const AXIS_COLOR = "#64748b";      // muted for graph axes
+/* ═══ Types ═══ */
 
-// Step colors — single accent for step labels, varied colors for equation highlighting
-const STEP_LABEL_COLOR = "#5eead4";   // consistent teal for all step labels
-const STEP_COLORS = [
-  "#5eead4",   // teal — equations/math
-  "#a78bfa",   // violet — equations/math
-  "#60a5fa",   // blue — equations/math
-  "#4ade80",   // green — equations/math
-  "#fbbf24",   // yellow — highlights
-  "#f472b6",   // pink — highlights
-  "#fb923c",   // orange — highlights
-];
-
-/** Extract math expression from a natural language question.
- *  e.g. "What is the integral of x^2 + 3x?" → "x^2 + 3x"
- *       "Solve 2x + 5 = 15" → "2x + 5 = 15"
- *       "5 + 3" → "5 + 3"
- */
-function extractMath(text: string): string {
-  if (!text) return "";
-  // Try to find an equation/expression with math operators or variables
-  const mathPatterns = [
-    /(\d+\s*[\+\-\*\/\^]=?\s*[\dxyz][\dxyz\s\+\-\*\/\^=\(\)\.]*)/i,  // e.g. 2x + 5 = 15
-    /([\dxyz][\dxyz\s\+\-\*\/\^=\(\)\.]*[\+\-\*\/\^=][\dxyz\s\+\-\*\/\^=\(\)\.]*)/i, // expressions with operators
-    /([∫∑√Δπ][^\s]*[\dxyz\s\+\-\*\/\^=\(\)\.]*)/i, // math symbols
-    /(\$[^$]+\$)/,  // LaTeX inline
-    /(\\frac|\\int|\\sqrt|\\sum)[^.?!]*/i, // LaTeX commands
-  ];
-  for (const pat of mathPatterns) {
-    const m = text.match(pat);
-    if (m && m[1] && m[1].trim().length >= 3) return m[1].trim();
-  }
-  // If no math found, return the full text (it might be the expression itself)
-  return text;
+export interface QuestionInfo {
+  label: string;
+  text: string;
+  idx: number;
+  yStart: number;
+  stepCount: number;
 }
 
-/* ── LaTeX → human-readable math ── */
-/* ── Unicode superscript helper ── */
-const SUP_MAP: Record<string, string> = {
-  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵",
-  "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻",
-  "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ", "i": "ⁱ", "x": "ˣ",
-  "y": "ʸ", "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ",
-  "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "k": "ᵏ", "l": "ˡ", "m": "ᵐ",
-  "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
-  "v": "ᵛ", "w": "ʷ", "z": "ᶻ", "∞": "°°",
-};
-function toSuperscript(s: string): string {
-  // Map ∞ specially
-  if (s === "∞" || s === "infty") return "∞";
-  return s.split("").map(c => SUP_MAP[c] ?? SUP_MAP[c.toLowerCase()] ?? c).join("");
-}
-
-function latexToHuman(s: string): string {
-  if (s == null || typeof s !== "string") return String(s ?? "");
-  let r = s;
-  // Fix control chars from JSON-mangled LaTeX backslashes:
-  // \f (form-feed) → \frac, \t (tab) → \times/\theta, \b (BS) → \beta, etc.
-  r = r.replace(/\f/g, "\\f");         // form-feed  → \f
-  r = r.replace(/\t/g, "\\t");         // tab        → \t
-  r = r.replace(/\x08/g, "\\b");       // backspace  → \b  (\b in regex = word boundary)
-  r = r.replace(/\r/g, "\\r");         // CR         → \r
-  r = r.replace(/\n/g, "\\n");         // newline    → \n
-  // Handle fractions — multiple forms Gemini may send:
-  // \frac{num}{den}, \frac num{den}, \frac{num}den, \fracND (single chars)
-  for (let i = 0; i < 3; i++) {
-    // Full braces: \frac{...}{...}
-    r = r.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "($1)⁄($2)");
-    // Left braces only: \frac{...}D
-    r = r.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}\s*([a-zA-Z0-9])/g, "($1)⁄($2)");
-    // Right braces only: \fracN{...}
-    r = r.replace(/\\frac\s*([a-zA-Z0-9])\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "($1)⁄($2)");
-    // No braces: \fracND (two single chars)
-    r = r.replace(/\\frac\s*([a-zA-Z0-9])\s*([a-zA-Z0-9])/g, "($1)⁄($2)");
-  }
-  // Square root
-  r = r.replace(/\\sqrt\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "√($1)");
-  // Integrals
-  r = r.replace(/\\int_\{([^}]*)}\^\{([^}]*)}/g, "∫[$1→$2]");
-  r = r.replace(/\\int/g, "∫");
-  // Summation / product
-  r = r.replace(/\\sum_\{([^}]*)}\^\{([^}]*)}/g, "Σ[$1→$2]");
-  r = r.replace(/\\sum/g, "Σ");
-  r = r.replace(/\\prod/g, "Π");
-  // Limits
-  r = r.replace(/\\lim_\{([^}]*)}/g, "lim($1)");
-  r = r.replace(/\\lim/g, "lim");
-  // Infinity
-  r = r.replace(/\\infty/g, "∞");
-  // Greek letters
-  r = r.replace(/\\alpha/g, "α"); r = r.replace(/\\beta/g, "β");
-  r = r.replace(/\\gamma/g, "γ"); r = r.replace(/\\delta/g, "δ");
-  r = r.replace(/\\epsilon/g, "ε"); r = r.replace(/\\theta/g, "θ");
-  r = r.replace(/\\lambda/g, "λ"); r = r.replace(/\\mu/g, "μ");
-  r = r.replace(/\\pi/g, "π"); r = r.replace(/\\sigma/g, "σ");
-  r = r.replace(/\\phi/g, "φ"); r = r.replace(/\\omega/g, "ω");
-  r = r.replace(/\\Delta/g, "Δ"); r = r.replace(/\\Sigma/g, "Σ");
-  // Trig / log
-  r = r.replace(/\\sin/g, "sin"); r = r.replace(/\\cos/g, "cos");
-  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\log/g, "log");
-  r = r.replace(/\\ln/g, "ln"); r = r.replace(/\\exp/g, "exp");
-  // Superscript: x^{2} → x² (common ones), else x^(n)
-  r = r.replace(/\^\{0}/g, "⁰"); r = r.replace(/\^\{1}/g, "¹");
-  r = r.replace(/\^\{2}/g, "²"); r = r.replace(/\^\{3}/g, "³");
-  r = r.replace(/\^\{4}/g, "⁴"); r = r.replace(/\^\{5}/g, "⁵");
-  r = r.replace(/\^\{6}/g, "⁶"); r = r.replace(/\^\{7}/g, "⁷");
-  r = r.replace(/\^\{8}/g, "⁸"); r = r.replace(/\^\{9}/g, "⁹");
-  // Compound superscripts like ^{n+1}, ^{2x}, ^{∞}
-  r = r.replace(/\^\{([^}]*)}/g, (_m, inner: string) => toSuperscript(inner));
-  // Bare caret: e^x → eˣ, x^2 → x², etc.
-  r = r.replace(/\^(\d)/g, (_m, d: string) => toSuperscript(d));
-  r = r.replace(/\^([a-zA-Z∞])/g, (_m, c: string) => toSuperscript(c));
-  r = r.replace(/\^([+\-])/g, (_m, c: string) => toSuperscript(c));
-  // Subscript: _{n} → _n
-  r = r.replace(/_\{([^}]*)}/g, "_$1");
-  // Operators
-  r = r.replace(/\\times/g, "×"); r = r.replace(/\\cdot/g, "·");
-  r = r.replace(/\\div/g, "÷"); r = r.replace(/\\pm/g, "±");
-  r = r.replace(/\\neq/g, "≠"); r = r.replace(/\\leq/g, "≤");
-  r = r.replace(/\\geq/g, "≥"); r = r.replace(/\\approx/g, "≈");
-  r = r.replace(/\\rightarrow/g, "→"); r = r.replace(/\\implies/g, "⟹");
-  r = r.replace(/\\Rightarrow/g, "⇒");
-  // Arrows
-  r = r.replace(/\\to/g, "→");
-  // Misc
-  r = r.replace(/\\partial/g, "∂"); r = r.replace(/\\nabla/g, "∇");
-  r = r.replace(/\\forall/g, "∀"); r = r.replace(/\\exists/g, "∃");
-  r = r.replace(/\\in/g, "∈"); r = r.replace(/\\notin/g, "∉");
-  r = r.replace(/\\subset/g, "⊂"); r = r.replace(/\\cup/g, "∪");
-  r = r.replace(/\\cap/g, "∩"); r = r.replace(/\\emptyset/g, "∅");
-  r = r.replace(/\\cdots/g, "…"); r = r.replace(/\\ldots/g, "…");
-  r = r.replace(/\\dots/g, "…"); r = r.replace(/\\vdots/g, "⋮");
-  // Boxed answers — just show the content
-  for (let i = 0; i < 2; i++) {
-    r = r.replace(/\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "[$1]");
-  }
-  r = r.replace(/\\overline\{([^{}]*)}/g, "$1̄");
-  r = r.replace(/\\underline\{([^{}]*)}/g, "$1");
-  r = r.replace(/\\hat\{([^{}]*)}/g, "$1̂");
-  r = r.replace(/\\vec\{([^{}]*)}/g, "$1→");
-  // Clean up remaining LaTeX formatting
-  r = r.replace(/\\,/g, " "); r = r.replace(/\\;/g, " ");
-  r = r.replace(/\\!/g, ""); r = r.replace(/\\quad/g, "  ");
-  r = r.replace(/\\qquad/g, "   ");
-  r = r.replace(/\\left/g, ""); r = r.replace(/\\right/g, "");
-  r = r.replace(/\\text\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathrm\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathbf\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathit\{([^}]*)}/g, "$1");
-  r = r.replace(/\\displaystyle/g, "");
-  // Last-chance frac cleanup: if \frac survived all patterns, strip it gracefully
-  r = r.replace(/\\frac\s*/g, "");
-  r = r.replace(/\\[a-zA-Z]+/g, ""); // catch-all: strip any remaining \commands
-  r = r.replace(/\{/g, ""); r = r.replace(/}/g, "");
-  // Replace programming asterisk with proper multiplication dot
-  r = r.replace(/(\d)\s*\*\s*(?=[\d(xyzXYZ])/g, "$1·");
-  r = r.replace(/\)\s*\*\s*(?=[\d(xyzXYZ])/g, ")·");
-  r = r.replace(/([a-zA-Z])\s*\*\s*(?=[\d(xyzXYZ])/g, "$1·");
-  // Collapse multiple spaces
-  r = r.replace(/  +/g, " ").trim();
-  return r;
+interface Page {
+  id: string;
+  label: string;           // "Q1", "Q2", etc.
+  questionText: string;
+  isFollowUp: boolean;
+  parentLabel?: string;     // For follow-ups: which Q they reference
+  commands: WhiteboardCommand[];
+  accentColor: string;
 }
 
 interface WhiteboardProps {
@@ -191,375 +47,88 @@ interface WhiteboardProps {
   onQuestionsChange?: (questions: QuestionInfo[]) => void;
   toolbarPortalRef?: React.RefObject<HTMLDivElement | null>;
   voiceCommand?: { cmd: string; arg?: string } | null;
+  scrollToLabel?: string | null;
 }
 
-/* ── Section = one response block on the board ── */
-interface Section {
-  idx: number;
-  label: string;         // "Q1", "Q2", "↪ follow-up"
-  isNewQuestion: boolean; // true = show divider, false = just spacing
-  yStart: number;        // absolute y where this section begins on the canvas
-  col: number;           // grid column index
-  row: number;           // grid row index
-  xOffset: number;       // px to add to x coordinates for this column
-  questionText?: string; // the user's original question text
-}
+/* ═══ Main Whiteboard Orchestrator ═══ */
 
-export interface QuestionInfo {
-  label: string;  // "Q1", "Q2"
-  text: string;   // truncated question text
-  idx: number;    // section index for scrolling
-  yStart: number;
-}
-
-const FOLLOWUP_GAP = 14;       // tight gap between steps within a question
-
-export function Whiteboard({ commands, isSpeaking = false, isThinking = false, onQuestionsChange, toolbarPortalRef, voiceCommand }: WhiteboardProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dprRef = useRef(1);
-  const queueRef = useRef<WhiteboardCommand[]>([]);
-  const completedRef = useRef<WhiteboardCommand[]>([]);
+export function Whiteboard({
+  commands,
+  isSpeaking = false,
+  isThinking = false,
+  onQuestionsChange,
+  toolbarPortalRef,
+  voiceCommand,
+  scrollToLabel,
+}: WhiteboardProps) {
+  const [pages, setPages] = useState<Page[]>([]);
+  const pagesRef = useRef<Page[]>([]);
   const processedRef = useRef(0);
-  const busyRef = useRef(false);
-  const maxYRef = useRef(0);
-  const viewWidthRef = useRef(800);
-  const [cursor, setCursor] = useState({ x: 0, y: 0, show: false, color: "#00e5ff" });
-  const [isDrawing, setIsDrawing] = useState(false);
-  const currentStepRef = useRef(0);
-  const [zoom, setZoom] = useState(2);
+  const questionCountRef = useRef(0);
+  const activePageIdRef = useRef<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pageRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
+  const dummyCanvasRef = useRef<HTMLCanvasElement | null>(null); // For toolbar undo/clear
+  const [zoom, setZoom] = useState(1);
 
-  // Section tracking
-  const sectionsRef = useRef<Section[]>([]);
-  const [sections, setSections] = useState<Section[]>([]);
-  const yOffsetRef = useRef(0);     // Y offset for current section
-  const questionCountRef = useRef(0); // counts actual questions (not follow-ups)
-  const turnCompleteRef = useRef(true); // true when the last turn finished
-  const sectionStartedRef = useRef(false); // did we start a section for this turn?
-  const awaitingAnswerRef = useRef(false); // true after question_header, before Gemini response
+  // Track active page for rendering
+  const [activePageId, setActivePageId] = useState<string | null>(null);
 
-  // ── Excel-style grid layout ──
-  // Each question (cell) has a row + column. Column widths and row heights are
-  // determined by the largest cell in that column/row respectively.
-  const CELL_PAD = 20;          // padding inside each cell
-  const CELL_GAP = 24;          // gap between cells
-  const CELL_MIN_W = 280;       // minimum cell width
-  // gridColWidths[c] = width of grid column c (widest cell content)
-  const gridColWidthsRef = useRef<number[]>([]);
-  // gridRowHeights[r] = height of grid row r (tallest cell content)
-  const gridRowHeightsRef = useRef<number[]>([]);
-  // Per-cell measured content dimensions (indexed by section idx)
-  const cellContentWRef = useRef<number[]>([]);   // per-section content width
-  const cellContentHRef = useRef<number[]>([]);   // per-section content height
-  const currentColRef = useRef(0);
-  const currentRowRef = useRef(0);
-  const xOffsetRef = useRef(0);
+  // Mascot state
+  const isDrawing = pages.some(p => p.id === activePageId && p.commands.length > 0);
+  const mascotState: MascotState = isDrawing && isThinking ? "writing" : isSpeaking ? "talking" : isThinking ? "thinking" : "idle";
 
-  // Derive mascot state
-  const mascotState: MascotState = isDrawing ? "writing" : isSpeaking ? "talking" : isThinking ? "thinking" : "idle";
-
-  /** Compute x offset for a grid column (sum of previous column widths + gaps) */
-  function gridColX(col: number): number {
-    let x = 0;
-    for (let c = 0; c < col; c++) {
-      x += (gridColWidthsRef.current[c] || CELL_MIN_W) + CELL_GAP;
-    }
-    return x;
-  }
-
-  /** Compute y offset for a grid row (sum of previous row heights + gaps) */
-  function gridRowY(row: number): number {
-    let y = 0;
-    for (let r = 0; r < row; r++) {
-      y += (gridRowHeightsRef.current[r] || 0) + CELL_GAP;
-    }
-    return y;
-  }
-
-  /** Measure the max x extent (absolute) of a rendered command */
-  function measureCommandMaxX(ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand): number {
-    const p = cmd.params;
-    switch (cmd.action) {
-      case "draw_text":
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        return (p.x as number) + ctx.measureText(latexToHuman((p.text as string) || "")).width;
-      case "draw_latex":
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        return (p.x as number) + ctx.measureText(latexToHuman((p.latex as string) || "")).width;
-      case "draw_graph":
-        return (p.x as number) + ((p.width as number) || 500);
-      case "draw_line":
-        return Math.max((p.x1 as number) || 0, (p.x2 as number) || 0);
-      case "step_marker": {
-        const sx = (p.x as number) || 20;
-        ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
-        return sx + ctx.measureText(`Step ${p.step}`).width + 40;
-      }
-      case "draw_circle":
-        return (p.x as number) + ((p._pillW as number) || ((p.radius as number) || 30));
-      default:
-        return 0;
-    }
-  }
-
-  /** Track a command's dimensions and update the grid column/row sizes */
-  function trackCellSize(ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand) {
-    const secIdx = cmd._sectionIdx;
-    if (secIdx === undefined) return;
-    const sec = sectionsRef.current[secIdx];
-    if (!sec) return;
-    const { col, row, xOffset } = sec;
-
-    // Track width
-    const maxX = measureCommandMaxX(ctx, cmd);
-    if (maxX > 0) {
-      const contentW = maxX - xOffset + CELL_PAD;
-      if (contentW > (cellContentWRef.current[secIdx] || 0)) {
-        cellContentWRef.current[secIdx] = contentW;
-        // Update grid column width if this cell is the widest
-        const colW = Math.max(contentW, CELL_MIN_W);
-        if (colW > (gridColWidthsRef.current[col] || 0)) {
-          gridColWidthsRef.current[col] = colW;
-        }
-      }
-    }
-
-    // Track height
-    const cmdY = getCommandY(cmd);
-    if (cmdY > 0) {
-      const cellH = cmdY - sec.yStart + 40; // 40px bottom padding
-      if (cellH > (cellContentHRef.current[secIdx] || 0)) {
-        cellContentHRef.current[secIdx] = cellH;
-        // Update grid row height if this cell is the tallest
-        if (cellH > (gridRowHeightsRef.current[row] || 0)) {
-          gridRowHeightsRef.current[row] = cellH;
-        }
-      }
-    }
-
-    // Grow canvas if needed
-    const totalH = gridRowY(gridRowHeightsRef.current.length);
-    if (totalH > maxYRef.current) {
-      maxYRef.current = totalH;
-      resizeCanvas();
-    }
-  }
-
-  function resizeCanvas() {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    const dpr = window.devicePixelRatio || 1;
-    dprRef.current = dpr;
-    // Column layout uses the 100% zoom viewport (zoom=1 → scale 0.5 → 2× container width)
-    // so more columns fit. At 200% (default) the user scrolls; at 100% everything is visible.
-    const w = container.clientWidth * 2;
-    viewWidthRef.current = w;
-    const minH = container.clientHeight;
-    const h = Math.max(minH, maxYRef.current);
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.scale(dpr, dpr);
-    clearBoard(ctx, w, h);
-    // Draw chalk column dividers at grid column boundaries
-    const numGridCols = gridColWidthsRef.current.length;
-    if (numGridCols > 1) {
-      for (let c = 1; c < numGridCols; c++) {
-        const cx = gridColX(c) - CELL_GAP / 2;
-        drawWavyLine(ctx, cx, 20, cx, h - 20, "rgba(148,163,184,0.08)", 0.8);
-      }
-    }
-    // Redraw all completed commands (update dynamic colWidth on headers)
-    completedRef.current.forEach(c => {
-      if (c.action === "question_header") {
-        const sIdx = c._sectionIdx ?? 0;
-        const secCol = sectionsRef.current[sIdx]?.col ?? 0;
-        c.params._colWidth = Math.max(gridColWidthsRef.current[secCol] || CELL_MIN_W, CELL_MIN_W);
-      }
-      const step = c._step || 0;
-      drawInstant(ctx, c, dpr, step);
-    });
-  }
-
-  /**
-   * Start a new layout section using Excel-style grid placement.
-   * New questions fill left→right in the current row, wrapping to a new row when full.
-   * Follow-ups stay in the same cell (same row/col), extending vertically.
-   */
-  function startNewSection(isNewQuestion: boolean) {
-    const sectionIdx = sectionsRef.current.length;
-
-    let col: number;
-    let row: number;
-    let xOffset: number;
-    let yStart: number;
-
-    if (isNewQuestion) {
-      questionCountRef.current += 1;
-
-      if (sectionIdx === 0) {
-        // Very first question → row 0, col 0
-        row = 0;
-        col = 0;
-        if (gridColWidthsRef.current.length === 0) gridColWidthsRef.current.push(CELL_MIN_W);
-        if (gridRowHeightsRef.current.length === 0) gridRowHeightsRef.current.push(0);
-      } else {
-        // Try next column in the current row
-        const nextCol = currentColRef.current + 1;
-        const nextColX = gridColX(nextCol);
-        const hasRoom = nextColX + CELL_MIN_W <= viewWidthRef.current;
-
-        if (hasRoom) {
-          row = currentRowRef.current;
-          col = nextCol;
-          while (gridColWidthsRef.current.length <= col) gridColWidthsRef.current.push(CELL_MIN_W);
-        } else {
-          // No room → wrap to new row, column 0
-          row = currentRowRef.current + 1;
-          col = 0;
-          while (gridRowHeightsRef.current.length <= row) gridRowHeightsRef.current.push(0);
-        }
-      }
-
-      xOffset = gridColX(col);
-      yStart = gridRowY(row);
-    } else {
-      // Follow-up → same cell, extend below last content in that cell
-      col = currentColRef.current;
-      row = currentRowRef.current;
-      xOffset = gridColX(col);
-      // Find the last section in this cell (same col & row)
-      let lastCellH = 0;
-      for (let i = sectionIdx - 1; i >= 0; i--) {
-        const s = sectionsRef.current[i];
-        if (s.col === col && s.row === row) {
-          lastCellH = cellContentHRef.current[i] || 0;
-          break;
-        }
-      }
-      yStart = gridRowY(row) + lastCellH + FOLLOWUP_GAP;
-    }
-
-    currentColRef.current = col;
-    currentRowRef.current = row;
-    xOffsetRef.current = xOffset;
-
-    const label = isNewQuestion ? `Q${questionCountRef.current}` : `↪ Q${questionCountRef.current}`;
-    const section: Section = { idx: sectionIdx, label, isNewQuestion, yStart, col, row, xOffset };
-    sectionsRef.current.push(section);
-    setSections([...sectionsRef.current]);
-
-    yOffsetRef.current = yStart;
-    currentStepRef.current = 0;
-    sectionStartedRef.current = true;
-    // Initialize cell content tracking
-    while (cellContentWRef.current.length <= sectionIdx) cellContentWRef.current.push(0);
-    while (cellContentHRef.current.length <= sectionIdx) cellContentHRef.current.push(0);
-  }
-
-  function autoScroll(y: number, x?: number) {
-    const container = containerRef.current;
-    if (!container) return;
-    const scale = zoomRef.current / 2;
-    // Vertical
-    const viewH = container.clientHeight;
-    const scaledY = y * scale;
-    const targetTop = scaledY - viewH + 120;
-    // Horizontal
-    const viewW = container.clientWidth;
-    const scaledX = (x ?? 0) * scale;
-    const targetLeft = scaledX - viewW + 200;
-    const needsY = targetTop > container.scrollTop;
-    const needsX = x !== undefined && targetLeft > container.scrollLeft;
-    if (needsY || needsX) {
-      container.scrollTo({
-        top: needsY ? targetTop : container.scrollTop,
-        left: needsX ? targetLeft : container.scrollLeft,
-        behavior: "smooth",
-      });
-    }
-  }
-
-  useEffect(() => {
+  /* ── Route incoming commands to pages ── */
+  const processCommands = useCallback(() => {
     const fresh = commands.slice(processedRef.current);
-    if (fresh.length > 0) {
-      queueRef.current.push(...fresh);
-      processedRef.current = commands.length;
-      drain();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commands]);
+    if (fresh.length === 0) return;
+    processedRef.current = commands.length;
 
-  async function drain() {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) { busyRef.current = false; return; }
+    let updated = false;
 
-    while (queueRef.current.length > 0) {
-      const cmd = queueRef.current.shift()!;
-
-      // Only honor explicit user-initiated clear
-      if (cmd.action === "clear") {
-        if (cmd.id === "user-clear") {
-          completedRef.current = [];
-          sectionsRef.current = [];
-          setSections([]);
-          maxYRef.current = 0;
-          yOffsetRef.current = 0;
-          currentStepRef.current = 0;
-          questionCountRef.current = 0;
-          turnCompleteRef.current = true;
-          sectionStartedRef.current = false;
-          awaitingAnswerRef.current = false;
-          currentColRef.current = 0;
-          currentRowRef.current = 0;
-          xOffsetRef.current = 0;
-          gridColWidthsRef.current = [];
-          gridRowHeightsRef.current = [];
-          cellContentWRef.current = [];
-          cellContentHRef.current = [];
-          resizeCanvas();
-          if (containerRef.current) containerRef.current.scrollTop = 0;
-        }
-        setCursor(c => ({ ...c, show: false }));
-        setIsDrawing(false);
+    for (const cmd of fresh) {
+      // Clear all pages
+      if (cmd.action === "clear" && cmd.id === "user-clear") {
+        pagesRef.current = [];
+        questionCountRef.current = 0;
+        activePageIdRef.current = null;
+        setPages([]);
+        setActivePageId(null);
+        updated = true;
         continue;
       }
+      if (cmd.action === "clear") continue;
 
-      // ── Question header: show user's typed question on the board ──
+      // Question header → create new page or follow-up
       if (cmd.action === "question_header") {
         const rawText = (cmd.params.text as string) || "";
 
-        // Detect follow-up: "[Q1] explain more" or short conversational queries
+        // Detect follow-up
         const qRef = rawText.match(/^\[Q(\d+)\]/i);
         let isFollowUp = false;
-        let parentSection: Section | undefined;
+        let parentLabel: string | undefined;
 
         if (qRef) {
-          // Explicit follow-up like "[Q1] explain more"
           const refNum = parseInt(qRef[1], 10);
-          parentSection = sectionsRef.current.find(
-            s => s.isNewQuestion && s.label === `Q${refNum}`
+          const parentPage = pagesRef.current.find(
+            p => !p.isFollowUp && p.label === `Q${refNum}`
           );
-          if (parentSection) isFollowUp = true;
-        } else if (sectionsRef.current.length > 0) {
-          // Heuristic: short queries without math symbols are likely follow-ups
+          if (parentPage) {
+            isFollowUp = true;
+            parentLabel = parentPage.label;
+          }
+        } else if (pagesRef.current.length > 0) {
           const trimmed = rawText.trim();
+          // Only treat as follow-up if it's very short and starts with clarifying words
+          // (not math keywords that indicate a new problem)
           const looksLikeFollowUp =
-            trimmed.length < 60 &&
-            !/[0-9]{2,}|[+\-*/^=∫∑∏√]|\\frac|derivative|integral|solve|graph|plot/i.test(trimmed) &&
-            /^(why|how|what|explain|elaborate|more|detail|show|can you|could you|tell me|again|huh|isn.t|doesn.t|but|and|also|wait|so|really|isn.t that|what about|what if)/i.test(trimmed);
+            trimmed.length < 40 &&
+            !/[0-9]{2,}|[+\-*/^=∫∑∏√]|\\frac|derivative|integral|solve|graph|plot|find|compute|evaluate|calculate|simplify/i.test(trimmed) &&
+            /^(why|explain|elaborate|more|detail|huh|isn.t|doesn.t|but|wait|really|isn.t that|what about that)/i.test(trimmed);
           if (looksLikeFollowUp) {
-            // Follow up on the most recent question
-            for (let i = sectionsRef.current.length - 1; i >= 0; i--) {
-              if (sectionsRef.current[i].isNewQuestion) {
-                parentSection = sectionsRef.current[i];
+            for (let i = pagesRef.current.length - 1; i >= 0; i--) {
+              if (!pagesRef.current[i].isFollowUp) {
+                parentLabel = pagesRef.current[i].label;
                 isFollowUp = true;
                 break;
               }
@@ -567,328 +136,248 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
           }
         }
 
-        if (isFollowUp && parentSection) {
-          // Jump to the parent question's cell before creating follow-up section
-          currentColRef.current = parentSection.col;
-          currentRowRef.current = parentSection.row;
-          startNewSection(false);
+        if (isFollowUp && parentLabel) {
+          // Find the parent page and add commands there
+          const parentPage = pagesRef.current.find(p => p.label === parentLabel);
+          if (parentPage) {
+            // Add a visual separator command to the parent page
+            const sepY = getNextY(parentPage.commands);
+            parentPage.commands = [
+              ...parentPage.commands,
+              {
+                id: `followup-sep-${Date.now()}`,
+                action: "draw_text" as const,
+                params: {
+                  text: `↪ ${rawText.replace(/^\[Q\d+\]\s*/i, "")}`,
+                  x: 30,
+                  y: sepY + 50,
+                  _isFollowUpHeader: true,
+                },
+              },
+            ];
+            activePageIdRef.current = parentPage.id;
+            setActivePageId(parentPage.id);
+            updated = true;
+          }
         } else {
-          startNewSection(true);
+          // New question → new page
+          questionCountRef.current += 1;
+          const label = `Q${questionCountRef.current}`;
+          const color = STEP_COLORS[(questionCountRef.current - 1) % STEP_COLORS.length];
+          const newPage: Page = {
+            id: `page-${Date.now()}-${questionCountRef.current}`,
+            label,
+            questionText: rawText,
+            isFollowUp: false,
+            commands: [],
+            accentColor: color,
+          };
+          pagesRef.current = [...pagesRef.current, newPage];
+          activePageIdRef.current = newPage.id;
+          setActivePageId(newPage.id);
+          updated = true;
         }
-        turnCompleteRef.current = false;
-        awaitingAnswerRef.current = true; // keep this section open for Gemini's answer
-
-        // Store question text on the section for external access
-        const section = sectionsRef.current[sectionsRef.current.length - 1];
-        section.questionText = rawText;
-
-        // Notify parent of updated question list
-        if (onQuestionsChange) {
-          const qs = sectionsRef.current
-            .filter(s => s.isNewQuestion && s.questionText)
-            .map(s => ({ label: s.label, text: s.questionText!.slice(0, 60), idx: s.idx, yStart: s.yStart }));
-          onQuestionsChange(qs);
-        }
-
-        // Draw cell label + math expression only
-        const label = section.label;
-        const qText = extractMath(rawText);
-        const qX = 20 + (section.xOffset || 0);
-        const qY = yOffsetRef.current + 22;
-
-        // Label badge (e.g. "Q1")
-        ctx.font = `bold 15px ${FONT}`;
-        const lw = ctx.measureText(label).width;
-        ctx.fillStyle = "rgba(99,102,241,0.15)";
-        ctx.beginPath();
-        ctx.roundRect(qX, qY - 13, lw + 12, 20, 6);
-        ctx.fill();
-        markerText(ctx, label, qX + 6, qY + 2, "#818cf8", 15);
-
-        // Math expression after label
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, CONTENT_SIZE);
-
-        // Subtle underline across column width
-        const colWidth = Math.max(gridColWidthsRef.current[section.col] || 0, CELL_MIN_W);
-        ctx.beginPath();
-        ctx.moveTo(qX, qY + 12);
-        ctx.lineTo(qX + colWidth - 40, qY + 12);
-        markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
-
-        // Track initial header content width in grid
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        const headerMaxX = qX + lw + 20 + ctx.measureText(qText).width;
-        const headerContentW = headerMaxX - (section.xOffset || 0) + CELL_PAD;
-        cellContentWRef.current[section.idx] = Math.max(headerContentW, CELL_MIN_W);
-        if (headerContentW > (gridColWidthsRef.current[section.col] || 0)) {
-          gridColWidthsRef.current[section.col] = Math.max(headerContentW, CELL_MIN_W);
-        }
-
-        // Track cell height
-        const headerH = 60;
-        cellContentHRef.current[section.idx] = headerH;
-        if (headerH > (gridRowHeightsRef.current[section.row] || 0)) {
-          gridRowHeightsRef.current[section.row] = headerH;
-        }
-
-        // Grow canvas if needed
-        const totalH = gridRowY(gridRowHeightsRef.current.length);
-        if (totalH > maxYRef.current) {
-          maxYRef.current = totalH;
-          resizeCanvas();
-        }
-        autoScroll(qY + 20, qX);
-        yOffsetRef.current += 40; // push Gemini content below question header
-
-        // Store with computed positions for redraw
-        const headerCmd: WhiteboardCommand = {
-          ...cmd,
-          params: { ...cmd.params, _x: qX, _y: qY, _label: label, _colWidth: colWidth },
-          _step: 0,
-          _sectionIdx: section.idx,
-        };
-        completedRef.current.push(headerCmd);
         continue;
       }
 
-      // ── Section management ──
-      // Every new Gemini response must start a new section to avoid overlap.
-      // EXCEPT when we just drew a question_header — the answer belongs in that same section.
-      if (awaitingAnswerRef.current) {
-        // Gemini's answer arrived — stay in the same section as the question header
-        awaitingAnswerRef.current = false;
-        sectionStartedRef.current = true;
-        turnCompleteRef.current = false;
-      } else if (turnCompleteRef.current && !sectionStartedRef.current) {
-        const isNewQ = cmd.action === "step_marker" && (cmd.params.step as number) === 1;
-        startNewSection(isNewQ || sectionsRef.current.length === 0);
-        turnCompleteRef.current = false;
-      }
-
-      // If still no section (edge case), create one
-      if (sectionsRef.current.length === 0) {
-        startNewSection(true);
-        turnCompleteRef.current = false;
-      }
-
-      setIsDrawing(true);
-      if (cmd.action === "step_marker") {
-        currentStepRef.current = (cmd.params.step as number) || currentStepRef.current + 1;
-      }
-
-      // Offset coordinates to place in current section's column area
-      const offsetCmd = offsetCommand(cmd, yOffsetRef.current, xOffsetRef.current);
-      offsetCmd._step = currentStepRef.current;
-      offsetCmd._sectionIdx = sectionsRef.current.length - 1;
-
-      // Strip redundant "Step N:" prefix from draw_text (AI sometimes duplicates step_marker)
-      if (offsetCmd.action === "draw_text" && typeof offsetCmd.params.text === "string") {
-        offsetCmd.params.text = offsetCmd.params.text.replace(/^Step\s*\d+\s*[:.\-–—]\s*/i, "");
-        if (!offsetCmd.params.text) continue; // skip if nothing left after stripping
-      }
-
-      // Dynamic circle→pill sizing: measure nearby text and auto-fit pill dimensions
-      // ONLY search within the same section to avoid cross-column matches
-      if (offsetCmd.action === "draw_circle") {
-        const rawCx = offsetCmd.params.x as number;
-        const rawCy = offsetCmd.params.y as number;
-        const circleSection = offsetCmd._sectionIdx;
-        let pillW = 60, pillH = 30;
-        let bestDist = Infinity;
-        let bestIsLatex = false;
-        for (let ci = completedRef.current.length - 1; ci >= 0; ci--) {
-          const prev = completedRef.current[ci];
-          // Only consider commands from the same section
-          if (prev._sectionIdx !== circleSection) continue;
-          if (prev.action !== "draw_text" && prev.action !== "draw_latex") continue;
-          const isLatex = prev.action === "draw_latex";
-          const tY = prev.params.y as number;
-          const tX = prev.params.x as number;
-          const yDist = Math.abs(rawCy - tY);
-          if (yDist > 80) continue;
-          const raw = isLatex ? prev.params.latex : prev.params.text;
-          const text = latexToHuman(raw as string);
-          ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-          const tw = ctx.measureText(text).width;
-          const textCx = tX + tw / 2;
-          const textCy = tY - CONTENT_SIZE * 0.3;
-          const dist = Math.hypot(rawCx - textCx, rawCy - textCy);
-          // Prefer latex over text: never replace a latex match with text
-          if (bestIsLatex && !isLatex) continue;
-          if (isLatex && !bestIsLatex && dist < 300) {
-            // Latex always wins over a previous text match
-            bestDist = dist;
-            bestIsLatex = true;
-          } else if (dist >= bestDist) {
-            continue;
-          } else {
-            bestDist = dist;
-            bestIsLatex = isLatex;
-          }
-          pillW = tw + 28;
-          pillH = CONTENT_SIZE + 16;
-          // Re-center pill on the text
-          offsetCmd.params.x = textCx;
-          offsetCmd.params.y = textCy;
+      // All other commands → route to active page
+      if (activePageIdRef.current) {
+        const activePage = pagesRef.current.find(p => p.id === activePageIdRef.current);
+        if (activePage) {
+          activePage.commands = [...activePage.commands, cmd];
+          updated = true;
         }
-        offsetCmd.params._pillW = pillW;
-        offsetCmd.params._pillH = pillH;
+      } else if (pagesRef.current.length === 0) {
+        // No page exists yet — create one
+        questionCountRef.current += 1;
+        const label = `Q${questionCountRef.current}`;
+        const color = STEP_COLORS[(questionCountRef.current - 1) % STEP_COLORS.length];
+        const newPage: Page = {
+          id: `page-${Date.now()}-${questionCountRef.current}`,
+          label,
+          questionText: "Solution",
+          isFollowUp: false,
+          commands: [cmd],
+          accentColor: color,
+        };
+        pagesRef.current = [...pagesRef.current, newPage];
+        activePageIdRef.current = newPage.id;
+        setActivePageId(newPage.id);
+        updated = true;
       }
+    }
 
-      // Track cell dimensions and grow canvas
-      trackCellSize(ctx, offsetCmd);
-      const cmdY = getCommandY(offsetCmd);
-      const cmdX = (offsetCmd.params.x as number) ?? (offsetCmd.params.x1 as number) ?? 0;
-      if (cmdY > 0) autoScroll(cmdY, cmdX);
-      await animateCmd(ctx, offsetCmd, dprRef.current, setCursor, currentStepRef.current);
-      completedRef.current.push(offsetCmd);
-      if (queueRef.current.length > 0) {
-        await new Promise(r => setTimeout(r, PAUSE_BETWEEN));
+    if (updated) {
+      setPages([...pagesRef.current]);
+      // Notify parent of question list
+      if (onQuestionsChange) {
+        const qs = pagesRef.current
+          .filter(p => !p.isFollowUp)
+          .map((p, i) => ({
+            label: p.label,
+            text: p.questionText.slice(0, 60),
+            idx: i,
+            yStart: 0,
+            stepCount: p.commands.filter(c => c.action === "step_marker").length,
+          }));
+        onQuestionsChange(qs);
       }
     }
-    setCursor(c => ({ ...c, show: false }));
-    setIsDrawing(false);
-    // Mark turn complete so next batch of commands creates a new section
-    // BUT if we're awaiting Gemini's answer (question_header was just drawn), keep the turn open
-    if (!awaitingAnswerRef.current) {
-      turnCompleteRef.current = true;
-      sectionStartedRef.current = false;
-    }
-    busyRef.current = false;
-    if (queueRef.current.length > 0) drain();
-  }
+  }, [commands, onQuestionsChange]);
 
-  // ── Graph preset: inject a draw_graph command directly ──
-  function handleGraphPreset(fn: string, label: string) {
-    // Place graph below current content
-    const yPos = Math.max(60, maxYRef.current + 30);
-    const graphCmd: WhiteboardCommand = {
-      id: `preset-${Date.now()}`,
-      action: "draw_graph",
-      params: { fn, label, x: 60, y: yPos, width: 500, height: 350 },
-    };
-    queueRef.current.push(graphCmd);
-    // Ensure a section exists
-    if (sectionsRef.current.length === 0) {
-      startNewSection(true);
-      turnCompleteRef.current = false;
-    }
-    drain();
-  }
-
-  // ── Undo: remove last completed command and redraw ──
-  function handleUndo() {
-    if (completedRef.current.length === 0) return;
-    completedRef.current.pop();
-    redrawAll();
-  }
-
-  // ── Clear board (user-initiated) ──
-  function handleClear() {
-    completedRef.current = [];
-    sectionsRef.current = [];
-    setSections([]);
-    maxYRef.current = 0;
-    yOffsetRef.current = 0;
-    currentStepRef.current = 0;
-    questionCountRef.current = 0;
-    turnCompleteRef.current = true;
-    sectionStartedRef.current = false;
-    awaitingAnswerRef.current = false;
-    currentColRef.current = 0;
-    currentRowRef.current = 0;
-    xOffsetRef.current = 0;
-    gridColWidthsRef.current = [];
-    gridRowHeightsRef.current = [];
-    cellContentWRef.current = [];
-    cellContentHRef.current = [];
-    resizeCanvas();
-    if (containerRef.current) containerRef.current.scrollTop = 0;
-  }
-
-  // Redraw everything from completedRef
-  function redrawAll() {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    const dpr = dprRef.current;
-    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-    for (const cmd of completedRef.current) {
-      drawInstant(ctx, cmd, dpr);
-    }
-  }
-
-  // Initial size + resize handler
   useEffect(() => {
-    resizeCanvas();
-    const onResize = () => resizeCanvas();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing external commands prop
+    processCommands();
+  }, [processCommands]);
 
-  // ── Voice command handler ──
+  /* ── Auto-scroll to active page when a new one is created ── */
+  useEffect(() => {
+    if (activePageId && scrollContainerRef.current) {
+      const el = pageRefsMap.current.get(activePageId);
+      if (el) {
+        setTimeout(() => {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 100);
+      }
+    }
+  }, [activePageId, pages.length]);
+
+  /* ── Voice commands ── */
   useEffect(() => {
     if (!voiceCommand) return;
     const { cmd, arg } = voiceCommand;
     switch (cmd) {
       case "clear":
-        handleClear();
+        pagesRef.current = [];
+        questionCountRef.current = 0;
+        activePageIdRef.current = null;
+        processedRef.current = 0;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing voiceCommand prop
+        setPages([]);
+        setActivePageId(null);
         break;
       case "zoom_in":
-        setZoom(prev => Math.min(3, prev + 0.25));
+        setZoom(prev => Math.min(2, prev + 0.25));
         break;
       case "zoom_out":
-        setZoom(prev => Math.max(0.25, prev - 0.25));
+        setZoom(prev => Math.max(0.5, prev - 0.25));
         break;
       case "goto_q": {
         const qNum = parseInt(arg || "1", 10);
-        const sec = sectionsRef.current.find(
-          s => s.isNewQuestion && s.label === `Q${qNum}`
-        );
-        if (sec && containerRef.current) {
-          const scale = zoomRef.current / 2;
-          containerRef.current.scrollTo({
-            top: sec.yStart * scale - 40,
-            left: sec.xOffset * scale,
-            behavior: "smooth",
-          });
+        const page = pagesRef.current.find(p => p.label === `Q${qNum}`);
+        if (page) {
+          const el = pageRefsMap.current.get(page.id);
+          el?.scrollIntoView({ behavior: "smooth", block: "start" });
         }
         break;
       }
       case "undo":
-        // Remove last command
         break;
     }
   }, [voiceCommand]);
 
-  // Ctrl+wheel zoom (non-passive so we can preventDefault)
-  const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
+  /* ── Ctrl+wheel zoom ── */
   useEffect(() => {
-    const el = containerRef.current;
+    const el = scrollContainerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        setZoom(prev => Math.max(0.25, Math.min(3, prev - e.deltaY * 0.003)));
+        setZoom(prev => Math.max(0.5, Math.min(2, prev - e.deltaY * 0.003)));
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const [portalReady, setPortalReady] = useState(false);
-  useEffect(() => setPortalReady(true), []);
+  /* ── Scroll to question when sidebar navigates ── */
+  useEffect(() => {
+    if (!scrollToLabel) return;
+    const page = pagesRef.current.find(p => p.label === scrollToLabel);
+    if (page) {
+      activePageIdRef.current = page.id;
+      setActivePageId(page.id);
+      const el = pageRefsMap.current.get(page.id);
+      if (el) {
+        setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      }
+    }
+  }, [scrollToLabel]);
+
+  /* ── Graph preset handler ── */
+  const handleGraphPreset = useCallback((fn: string, label: string) => {
+    // Find or create active page, then inject graph command
+    let targetPage = pagesRef.current.find(p => p.id === activePageIdRef.current);
+    if (!targetPage && pagesRef.current.length > 0) {
+      targetPage = pagesRef.current[pagesRef.current.length - 1];
+    }
+    if (!targetPage) {
+      questionCountRef.current += 1;
+      const lbl = `Q${questionCountRef.current}`;
+      const color = STEP_COLORS[(questionCountRef.current - 1) % STEP_COLORS.length];
+      targetPage = {
+        id: `page-${Date.now()}-${questionCountRef.current}`,
+        label: lbl,
+        questionText: `Graph: ${label}`,
+        isFollowUp: false,
+        commands: [],
+        accentColor: color,
+      };
+      pagesRef.current = [...pagesRef.current, targetPage];
+      activePageIdRef.current = targetPage.id;
+    }
+    const yPos = getNextY(targetPage.commands) + 30;
+    const graphCmd: WhiteboardCommand = {
+      id: `preset-${Date.now()}`,
+      action: "draw_graph",
+      params: { fn, label, x: 60, y: yPos, width: 500, height: 350 },
+    };
+    // Update immutably by replacing the page in pagesRef
+    const updatedPage = { ...targetPage, commands: [...targetPage.commands, graphCmd] };
+    pagesRef.current = pagesRef.current.map(p => p.id === updatedPage.id ? updatedPage : p);
+    setPages([...pagesRef.current]);
+  }, []);
+
+  /* ── Clear / Undo handlers (for toolbar) ── */
+  const handleClear = useCallback(() => {
+    pagesRef.current = [];
+    questionCountRef.current = 0;
+    activePageIdRef.current = null;
+    processedRef.current = 0;
+    setPages([]);
+    setActivePageId(null);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (activePageIdRef.current) {
+      const page = pagesRef.current.find(p => p.id === activePageIdRef.current);
+      if (page && page.commands.length > 0) {
+        page.commands = page.commands.slice(0, -1);
+        setPages([...pagesRef.current]);
+      }
+    }
+  }, []);
+
+  const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
+  const [dummyCanvas, setDummyCanvas] = useState<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resolving portal ref after mount
+    setPortalTarget(toolbarPortalRef?.current ?? null);
+    if (!dummyCanvasRef.current) {
+      dummyCanvasRef.current = document.createElement("canvas");
+    }
+    setDummyCanvas(dummyCanvasRef.current);
+  }, [toolbarPortalRef]);
+
+  const BG = "#0b1120";
 
   return (
     <div className="relative flex-1 overflow-hidden" style={{ background: BG }}>
-      {/* Toolbar + graph presets + Q-nav — portaled into header */}
-      {portalReady && toolbarPortalRef?.current && createPortal(
+      {/* ── Toolbar (portaled into header) ── */}
+      {portalTarget && createPortal(
         <>
           {/* Question navigation tabs */}
-          {sections.filter(s => s.isNewQuestion).length > 1 && (
+          {pages.filter(p => !p.isFollowUp).length > 1 && (
             <div className="flex items-center gap-0.5 rounded-xl px-1.5 py-1"
               style={{
                 background: "rgba(148,163,184,0.06)",
@@ -896,113 +385,183 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
               }}
             >
               <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none" style={{ scrollbarWidth: "none", maxWidth: 220 }}>
-                {sections.filter(s => s.isNewQuestion).map(sec => (
+                {pages.filter(p => !p.isFollowUp).map(page => (
                   <button
-                    key={sec.idx}
+                    key={page.id}
                     onClick={() => {
-                      containerRef.current?.scrollTo({ top: sec.yStart * (zoom / 2), behavior: "smooth" });
+                      const el = pageRefsMap.current.get(page.id);
+                      el?.scrollIntoView({ behavior: "smooth", block: "start" });
                     }}
-                    className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-white/10 whitespace-nowrap shrink-0"
-                    style={{ color: "#94a3b8" }}
-                    title={sec.questionText ? `${sec.label}: ${sec.questionText}` : `Scroll to ${sec.label}`}
+                    className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      page.id === activePageId ? "bg-white/10" : "hover:bg-white/5"
+                    }`}
+                    style={{ color: page.id === activePageId ? page.accentColor : "#94a3b8" }}
+                    title={`${page.label}: ${page.questionText}`}
                   >
-                    <span style={{ color: STEP_COLORS[sec.idx % STEP_COLORS.length] }}>●</span>
-                    {sec.label}
+                    <span style={{ color: page.accentColor }}>●</span>
+                    {page.label}
                   </button>
                 ))}
               </div>
-              {sections.filter(s => s.isNewQuestion).length > 5 && (
-                <span className="text-[10px] shrink-0 pl-0.5" style={{ color: "var(--text-muted)" }}>…</span>
-              )}
             </div>
           )}
           <GraphPresets onGraph={handleGraphPreset} />
           <WhiteboardToolbar
-            canvasRef={canvasRef}
-            containerRef={containerRef}
+            canvasRef={{ current: dummyCanvas }}
+            containerRef={scrollContainerRef}
             onUndo={handleUndo}
             onClear={handleClear}
-            canUndo={completedRef.current.length > 0}
+            canUndo={pages.some(p => p.commands.length > 0)}
             zoom={zoom}
             onZoomChange={setZoom}
           />
         </>,
-        toolbarPortalRef.current,
+        portalTarget,
       )}
 
-      {/* Writing hand cursor (inside scrollable container) */}
+      {/* ── Notebook Content ── */}
       <div
-        ref={containerRef}
+        ref={scrollContainerRef}
         className="absolute inset-0 overflow-auto"
-        style={{ scrollbarWidth: "thin", scrollbarColor: "#1e293b #060a10" }}
+        style={{
+          scrollbarWidth: "none", // hide scrollbar for sleek look
+        }}
       >
+        {/* Pinned Question Header */}
+        {pages.filter(p => !p.isFollowUp).length > 0 && activePageId && (() => {
+          const activePage = pages.find(p => p.id === activePageId);
+          if (activePage) {
+            const stepCount = activePage.commands.filter(c => c.action === "step_marker").length;
+            return (
+              <div className="sticky top-0 left-0 right-0 z-20 flex justify-center pt-4 pb-8 pointer-events-none bg-gradient-to-b from-[#0b1120] via-[#0b1120]/80 to-transparent">
+                <div className="pointer-events-auto px-5 py-2.5 rounded-2xl shadow-lg flex items-center gap-3 backdrop-blur-md"
+                     style={{ background: "rgba(15, 23, 42, 0.80)", border: "1px solid rgba(148,163,184,0.12)" }}>
+                  <span className="text-[11px] font-bold tracking-wider px-2 py-0.5 rounded-md"
+                    style={{ color: activePage.accentColor, background: `${activePage.accentColor}18` }}>
+                    {activePage.label}
+                  </span>
+                  <span className="text-[13px] font-medium leading-snug max-w-[400px] truncate" style={{ color: "var(--text-primary)" }}>
+                    {activePage.questionText}
+                  </span>
+                  {stepCount > 0 && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                      style={{ background: "rgba(148,163,184,0.08)", color: "var(--text-muted)" }}>
+                      {stepCount} step{stepCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         <div style={{
-          transform: `scale(${zoom / 2})`,
-          transformOrigin: "top left",
-          width: `${200 / zoom}%`,
-          minHeight: `${200 / zoom}%`,
+          transform: `scale(${zoom})`,
+          transformOrigin: "top center",
+          width: `${100 / zoom}%`,
+          padding: "40px 0 120px 0", // Top spacing for banner, bottom spacing for scrolling
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
         }}>
-          <canvas ref={canvasRef} className="block" />
-          <WritingHand x={cursor.x} y={cursor.y} show={cursor.show} glowColor={cursor.color} />
+          {/* ── Pages ── */}
+          {pages.filter(p => !p.isFollowUp).map(page => (
+            <div
+              key={page.id}
+              ref={el => {
+                if (el) pageRefsMap.current.set(page.id, el);
+              }}
+              className="w-full max-w-[800px]" // Constraint width inside the canvas instead of shrinking the canvas container
+            >
+              <NotebookPage
+                label={page.label}
+                questionText={page.questionText}
+                commands={page.commands}
+                isActive={page.id === activePageId}
+                isThinking={isThinking && page.id === activePageId}
+                accentColor={page.accentColor}
+              />
+            </div>
+          ))}
+
+          {/* ── Empty State ── */}
+          {pages.length === 0 && (
+            <div className="flex items-center justify-center" style={{ minHeight: "70vh" }}>
+              <div className="text-center relative">
+                {/* Floating math symbols */}
+                <div className="absolute inset-0 -m-20 pointer-events-none overflow-hidden opacity-[0.06]" aria-hidden>
+                  <span className="absolute text-4xl top-2 left-4" style={{ animation: "mascotFloat 4s ease-in-out infinite" }}>∫</span>
+                  <span className="absolute text-3xl top-8 right-6" style={{ animation: "mascotFloat 5s ease-in-out 0.5s infinite" }}>π</span>
+                  <span className="absolute text-5xl bottom-4 left-8" style={{ animation: "mascotFloat 3.5s ease-in-out 1s infinite" }}>√</span>
+                  <span className="absolute text-3xl bottom-8 right-2" style={{ animation: "mascotFloat 4.5s ease-in-out 0.3s infinite" }}>∑</span>
+                  <span className="absolute text-4xl top-1/2 left-0" style={{ animation: "mascotFloat 3.8s ease-in-out 0.7s infinite" }}>Δ</span>
+                  <span className="absolute text-3xl top-1/3 right-0" style={{ animation: "mascotFloat 4.2s ease-in-out 1.2s infinite" }}>∞</span>
+                </div>
+                {/* Owl mascot */}
+                <svg width="80" height="90" viewBox="0 0 80 90" fill="none" xmlns="http://www.w3.org/2000/svg"
+                  className="mx-auto mb-4" style={{ filter: "drop-shadow(0 0 16px rgba(99,102,241,0.4))", animation: "mascotFloat 3s ease-in-out infinite" }}>
+                  <ellipse cx="40" cy="58" rx="26" ry="28" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1.5" />
+                  <ellipse cx="40" cy="64" rx="16" ry="18" fill="#0f1d35" opacity="0.6" />
+                  <ellipse cx="14" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1"
+                    style={{ transformOrigin: "24px 50px", animation: "wingWave 1.2s ease-in-out infinite" }} />
+                  <ellipse cx="66" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1" />
+                  <circle cx="40" cy="28" r="22" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1.5" />
+                  <path d="M22 12 L26 22 L18 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
+                  <path d="M58 12 L54 22 L62 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
+                  <circle cx="32" cy="26" r="9" fill="#0a1628" />
+                  <circle cx="48" cy="26" r="9" fill="#0a1628" />
+                  <circle cx="32" cy="26" r="5" fill="#818cf8" opacity="0.9">
+                    <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <circle cx="48" cy="26" r="5" fill="#818cf8" opacity="0.9">
+                    <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <circle cx="33" cy="25" r="2" fill="#060a10" />
+                  <circle cx="49" cy="25" r="2" fill="#060a10" />
+                  <circle cx="34" cy="24" r="1" fill="#ffffff" opacity="0.8" />
+                  <circle cx="50" cy="24" r="1" fill="#ffffff" opacity="0.8" />
+                  <rect x="22" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
+                  <rect x="42" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
+                  <line x1="38" y1="24" x2="42" y2="24" stroke="#64748b" strokeWidth="1" />
+                  <path d="M36 33 L40 36 L44 33" fill="#fbbf24" stroke="#d97706" strokeWidth="0.8" />
+                  <polygon points="22,10 40,2 58,10 40,18" fill="#334155" stroke="#475569" strokeWidth="1" />
+                  <rect x="38" y="2" width="4" height="2" rx="1" fill="#475569" />
+                  <ellipse cx="32" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
+                  <ellipse cx="48" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
+                </svg>
+                <h2 className="text-xl font-semibold mb-1" style={{ color: "var(--accent-light)", textShadow: "0 0 20px var(--accent-glow)" }}>
+                  Hi! I&apos;m MathBoard 🦉
+                </h2>
+                <p className="text-sm max-w-[320px] mx-auto mb-4" style={{ color: "var(--text-secondary)" }}>
+                  Upload a photo of your homework, hold <kbd className="rounded px-1.5 py-0.5 text-[11px]" style={{ border: "1px solid var(--border)", color: "var(--accent-light)" }}>Space</kbd> to talk, or type a question below
+                </p>
+                <div className="flex flex-wrap justify-center gap-2 max-w-[360px] mx-auto">
+                  {["What is π?", "Solve 2x+3=7", "Explain fractions"].map((q) => (
+                    <span
+                      key={q}
+                      className="rounded-full px-3 py-1 text-[11px] font-medium"
+                      style={{
+                        background: "rgba(99,102,241,0.08)",
+                        border: "1px solid rgba(99,102,241,0.15)",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {q}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-      {commands.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center relative">
-            {/* Floating math symbols background */}
-            <div className="absolute inset-0 -m-20 pointer-events-none overflow-hidden opacity-[0.06]" aria-hidden>
-              <span className="absolute text-4xl top-2 left-4" style={{ animation: "mascotFloat 4s ease-in-out infinite" }}>∫</span>
-              <span className="absolute text-3xl top-8 right-6" style={{ animation: "mascotFloat 5s ease-in-out 0.5s infinite" }}>π</span>
-              <span className="absolute text-5xl bottom-4 left-8" style={{ animation: "mascotFloat 3.5s ease-in-out 1s infinite" }}>√</span>
-              <span className="absolute text-3xl bottom-8 right-2" style={{ animation: "mascotFloat 4.5s ease-in-out 0.3s infinite" }}>∑</span>
-              <span className="absolute text-4xl top-1/2 left-0" style={{ animation: "mascotFloat 3.8s ease-in-out 0.7s infinite" }}>Δ</span>
-              <span className="absolute text-3xl top-1/3 right-0" style={{ animation: "mascotFloat 4.2s ease-in-out 1.2s infinite" }}>∞</span>
-            </div>
-            {/* Owl mascot (waving version) */}
-            <svg width="80" height="90" viewBox="0 0 80 90" fill="none" xmlns="http://www.w3.org/2000/svg"
-              className="mx-auto mb-4" style={{ filter: "drop-shadow(0 0 16px rgba(99,102,241,0.4))", animation: "mascotFloat 3s ease-in-out infinite" }}>
-              <ellipse cx="40" cy="58" rx="26" ry="28" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1.5" />
-              <ellipse cx="40" cy="64" rx="16" ry="18" fill="#0f1d35" opacity="0.6" />
-              <ellipse cx="14" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1"
-                style={{ transformOrigin: "24px 50px", animation: "wingWave 1.2s ease-in-out infinite" }} />
-              <ellipse cx="66" cy="50" rx="10" ry="18" fill="#1a2744" stroke="#2d4a7a" strokeWidth="1" />
-              <circle cx="40" cy="28" r="22" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1.5" />
-              <path d="M22 12 L26 22 L18 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
-              <path d="M58 12 L54 22 L62 20 Z" fill="#1e3050" stroke="#2d4a7a" strokeWidth="1" />
-              <circle cx="32" cy="26" r="9" fill="#0a1628" />
-              <circle cx="48" cy="26" r="9" fill="#0a1628" />
-              <circle cx="32" cy="26" r="5" fill="#818cf8" opacity="0.9">
-                <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
-              </circle>
-              <circle cx="48" cy="26" r="5" fill="#818cf8" opacity="0.9">
-                <animate attributeName="r" values="5;4.5;5" dur="2s" repeatCount="indefinite" />
-              </circle>
-              <circle cx="33" cy="25" r="2" fill="#060a10" />
-              <circle cx="49" cy="25" r="2" fill="#060a10" />
-              <circle cx="34" cy="24" r="1" fill="#ffffff" opacity="0.8" />
-              <circle cx="50" cy="24" r="1" fill="#ffffff" opacity="0.8" />
-              <rect x="22" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
-              <rect x="42" y="18" width="16" height="14" rx="3" fill="none" stroke="#64748b" strokeWidth="1.2" />
-              <line x1="38" y1="24" x2="42" y2="24" stroke="#64748b" strokeWidth="1" />
-              <path d="M36 33 L40 36 L44 33" fill="#fbbf24" stroke="#d97706" strokeWidth="0.8" />
-              <polygon points="22,10 40,2 58,10 40,18" fill="#334155" stroke="#475569" strokeWidth="1" />
-              <rect x="38" y="2" width="4" height="2" rx="1" fill="#475569" />
-              <ellipse cx="32" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
-              <ellipse cx="48" cy="86" rx="6" ry="3" fill="#f59e0b" opacity="0.8" />
-            </svg>
-            <h2 className="text-xl font-semibold mb-1" style={{ color: "var(--accent-light)", textShadow: "0 0 20px var(--accent-glow)" }}>
-              Hi! I&apos;m MathBoard 🦉
-            </h2>
-            <p className="text-sm max-w-[280px] mx-auto" style={{ color: "var(--text-secondary)" }}>
-              Upload a photo of your homework or hold <kbd className="rounded px-1.5 py-0.5 text-[11px]" style={{ border: "1px solid var(--border)", color: "var(--accent-light)" }}>Space</kbd> to ask me anything
-            </p>
-          </div>
-        </div>
-      )}
+
       {/* Teacher mascot */}
       <TeacherMascot state={mascotState} />
-      {/* Thinking indicator */}
-      {isThinking && !isDrawing && commands.length > 0 && (
+
+      {/* Thinking indicator (when no pages yet) */}
+      {isThinking && pages.length === 0 && (
         <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-4 py-2"
           style={{ background: "rgba(10,15,30,0.7)", backdropFilter: "blur(8px)", border: "1px solid var(--border)" }}>
           <span className="h-2 w-2 rounded-full animate-bounce" style={{ background: "var(--accent-light)", animationDelay: "0ms" }} />
@@ -1017,635 +576,22 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
 
 /* ═══ Helpers ═══ */
 
-/** Offset X and Y coordinates in a command so it draws in the current section's column */
-function offsetCommand(cmd: WhiteboardCommand, yOff: number, xOff: number): WhiteboardCommand {
-  if (yOff === 0 && xOff === 0) return { ...cmd, params: { ...cmd.params } };
-  const p = { ...cmd.params };
-  if (p.y !== undefined) p.y = (p.y as number) + yOff;
-  if (p.y1 !== undefined) p.y1 = (p.y1 as number) + yOff;
-  if (p.y2 !== undefined) p.y2 = (p.y2 as number) + yOff;
-  if (p.x !== undefined) p.x = (p.x as number) + xOff;
-  if (p.x1 !== undefined) p.x1 = (p.x1 as number) + xOff;
-  if (p.x2 !== undefined) p.x2 = (p.x2 as number) + xOff;
-  return { ...cmd, params: p };
-}
-
-function getCommandY(cmd: WhiteboardCommand): number {
-  const p = cmd.params;
-  if (cmd.action === "draw_circle") {
-    const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-    return (p.y as number) + ph / 2;
-  }
-  if (p.y !== undefined) {
-    if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
-    return p.y as number;
-  }
-  if (p.y1 !== undefined) return Math.max(p.y1 as number, p.y2 as number);
-  return 0;
-}
-
-/* ═══ Safe math evaluator for graph plotting ═══ */
-
-// Whitelist of allowed tokens in math expressions
-const SAFE_MATH_RE = /^[0-9x+\-*/().,%^ \t\n\r]*$/;
-const SAFE_FUNCS = [
-  "Math.sin","Math.cos","Math.tan","Math.abs","Math.sqrt","Math.log","Math.log2","Math.log10",
-  "Math.exp","Math.pow","Math.floor","Math.ceil","Math.round","Math.min","Math.max",
-  "Math.PI","Math.E","Math.asin","Math.acos","Math.atan","Math.atan2",
-  "Math.sinh","Math.cosh","Math.tanh","Math.sign","Math.cbrt","Math.hypot",
-];
-
-function evalMathFn(expr: string, x: number): number {
-  try {
-    // Strip all allowed Math.xxx calls, then verify only safe chars remain
-    let stripped = expr;
-    for (const fn of SAFE_FUNCS) stripped = stripped.replaceAll(fn, "");
-    if (!SAFE_MATH_RE.test(stripped)) return NaN;
-
-    const fn = new Function("x", "Math", `"use strict"; return (${expr});`);
-    const result = fn(x, Math);
-    return typeof result === "number" && isFinite(result) ? result : NaN;
-  } catch {
-    return NaN;
-  }
-}
-
-/* ═══ Graph drawing helpers ═══ */
-
-function drawGraphAxes(
-  ctx: CanvasRenderingContext2D,
-  gx: number, gy: number, gw: number, gh: number,
-  xMin: number, xMax: number, yMin: number, yMax: number,
-) {
-  const TICK_COLOR = "#64748b";
-  const LABEL_SIZE = 13;
-
-  const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
-  const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
-
-  const ox = mapX(0), oy = mapY(0);
-  ctx.lineCap = "round";
-  ctx.shadowBlur = 0;
-
-  // X-axis
-  if (yMin <= 0 && yMax >= 0) {
-    ctx.beginPath(); ctx.moveTo(gx, oy); ctx.lineTo(gx + gw, oy);
-    markerStroke(ctx, AXIS_COLOR, 1.5);
-    ctx.beginPath(); ctx.moveTo(gx + gw, oy);
-    ctx.lineTo(gx + gw - 8, oy - 4); ctx.moveTo(gx + gw, oy);
-    ctx.lineTo(gx + gw - 8, oy + 4);
-    markerStroke(ctx, AXIS_COLOR, 1.5);
-  }
-  // Y-axis
-  if (xMin <= 0 && xMax >= 0) {
-    ctx.beginPath(); ctx.moveTo(ox, gy + gh); ctx.lineTo(ox, gy);
-    markerStroke(ctx, AXIS_COLOR, 1.5);
-    ctx.beginPath(); ctx.moveTo(ox, gy);
-    ctx.lineTo(ox - 4, gy + 8); ctx.moveTo(ox, gy);
-    ctx.lineTo(ox + 4, gy + 8);
-    markerStroke(ctx, AXIS_COLOR, 1.5);
-  }
-
-  const xStep = niceStep(xMax - xMin);
-  const yStep = niceStep(yMax - yMin);
-
-  ctx.font = `${LABEL_SIZE}px ${FONT}`;
-  ctx.fillStyle = TICK_COLOR;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-
-  const tickY = (yMin <= 0 && yMax >= 0) ? oy : gy + gh;
-  for (let v = Math.ceil(xMin / xStep) * xStep; v <= xMax; v += xStep) {
-    if (Math.abs(v) < xStep * 0.01) continue;
-    const px = mapX(v);
-    ctx.beginPath(); ctx.moveTo(px, tickY - 4); ctx.lineTo(px, tickY + 4);
-    ctx.strokeStyle = TICK_COLOR; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillText(formatTickLabel(v), px, tickY + 6);
-  }
-
-  const tickX = (xMin <= 0 && xMax >= 0) ? ox : gx;
-  ctx.textAlign = "right";
-  ctx.textBaseline = "middle";
-  for (let v = Math.ceil(yMin / yStep) * yStep; v <= yMax; v += yStep) {
-    if (Math.abs(v) < yStep * 0.01) continue;
-    const py = mapY(v);
-    ctx.beginPath(); ctx.moveTo(tickX - 4, py); ctx.lineTo(tickX + 4, py);
-    ctx.strokeStyle = TICK_COLOR; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillText(formatTickLabel(v), tickX - 8, py);
-  }
-
-  ctx.textAlign = "center"; ctx.textBaseline = "top";
-  ctx.fillText("x", gx + gw + 12, tickY - 4);
-  ctx.textAlign = "left"; ctx.textBaseline = "middle";
-  ctx.fillText("y", (xMin <= 0 && xMax >= 0 ? ox : gx) + 8, gy - 8);
-}
-
-function niceStep(range: number): number {
-  const rough = range / 8;
-  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
-  const norm = rough / mag;
-  if (norm <= 1.5) return mag;
-  if (norm <= 3.5) return 2 * mag;
-  if (norm <= 7.5) return 5 * mag;
-  return 10 * mag;
-}
-
-function formatTickLabel(v: number): string {
-  if (isNaN(v) || !isFinite(v)) return "";
-  return Math.abs(v) >= 1000 ? v.toExponential(0) : parseFloat(v.toFixed(2)).toString();
-}
-
-function drawGraphCurve(
-  ctx: CanvasRenderingContext2D,
-  fn: string, gx: number, gy: number, gw: number, gh: number,
-  xMin: number, xMax: number, yMin: number, yMax: number,
-  color: string,
-) {
-  const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
-  const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
-  const SAMPLES = 300;
-  const dx = (xMax - xMin) / SAMPLES;
-
-  ctx.lineCap = "round"; ctx.lineJoin = "round";
-  ctx.beginPath();
-  let penDown = false;
-
-  for (let i = 0; i <= SAMPLES; i++) {
-    const xv = xMin + i * dx;
-    const yv = evalMathFn(fn, xv);
-    if (isNaN(yv) || yv < yMin - 5 || yv > yMax + 5) {
-      penDown = false;
-      continue;
+/** Get the next available Y position in a page's commands */
+function getNextY(commands: WhiteboardCommand[]): number {
+  let maxY = 60;
+  for (const cmd of commands) {
+    const p = cmd.params;
+    let bottom = 0;
+    if (p.y !== undefined) {
+      const y = p.y as number;
+      if (cmd.action === "draw_graph") bottom = y + ((p.height as number) || 350) + 30;
+      else if (cmd.action === "draw_text" || cmd.action === "draw_latex") bottom = y + ((p.size as number) || 34) + 15;
+      else if (cmd.action === "step_marker") bottom = y + 50;
+      else bottom = y + 50;
+    } else if (p.y1 !== undefined) {
+      bottom = Math.max(p.y1 as number, p.y2 as number) + 20;
     }
-    const px = mapX(xv), py = mapY(yv);
-    if (!penDown) { ctx.moveTo(px, py); penDown = true; }
-    else ctx.lineTo(px, py);
+    if (bottom > maxY) maxY = bottom;
   }
-
-  // Glow effect for graph curve
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 6;
-  markerStroke(ctx, color, 3);
-  ctx.shadowBlur = 0;
-}
-
-function drawGraphLabel(
-  ctx: CanvasRenderingContext2D,
-  label: string, gx: number, gy: number, gw: number,
-  color: string,
-) {
-  const text = latexToHuman(label);
-  ctx.font = `bold 18px ${FONT}`;
-  const tw = ctx.measureText(text).width;
-  markerText(ctx, text, gx + gw / 2 - tw / 2, gy - 20, color, 18, true);
-}
-
-/* ═══ Helpers: clean marker-style drawing (no neon glow) ═══ */
-
-/** Hand-drawn wavy line — imperfect underline effect */
-function drawWavyLine(
-  ctx: CanvasRenderingContext2D,
-  x1: number, y1: number, x2: number, y2: number,
-  color: string, width: number,
-) {
-  const len = Math.hypot(x2 - x1, y2 - y1);
-  const segments = Math.max(4, Math.floor(len / 12));
-  // Perpendicular direction for displacement
-  const dx = x2 - x1, dy = y2 - y1;
-  const nx = -dy / len, ny = dx / len; // unit normal
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  for (let i = 1; i <= segments; i++) {
-    const t = i / segments;
-    const disp = Math.sin(t * Math.PI * segments * 0.5) * 2.5;
-    ctx.lineTo(x1 + dx * t + nx * disp, y1 + dy * t + ny * disp);
-  }
-  markerStroke(ctx, color, width);
-}
-
-function markerText(
-  ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
-  color: string, size: number, bold = false,
-) {
-  ctx.font = `${bold ? "bold " : ""}${size}px ${FONT}`;
-  // Subtle chalk shadow — lighter on bold to prevent ghosting
-  ctx.shadowColor = "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = bold ? 1.5 : 2.5;
-  ctx.shadowOffsetX = 0.5;
-  ctx.shadowOffsetY = 0.5;
-  ctx.fillStyle = color;
-  ctx.fillText(text, x, y);
-  // Reset shadow
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-}
-
-function markerStroke(
-  ctx: CanvasRenderingContext2D, color: string, width: number,
-) {
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.stroke();
-}
-
-type SetCursor = React.Dispatch<
-  React.SetStateAction<{ x: number; y: number; show: boolean; color: string }>
->;
-
-/* ═══ Step-based color helper ═══ */
-function getStepColor(step: number): string {
-  if (step <= 0) return STEP_COLORS[0];
-  return STEP_COLORS[(step - 1) % STEP_COLORS.length];
-}
-
-/* ═══ Animated command renderer ═══ */
-
-function animateCmd(
-  ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
-  dpr: number, setCursor: SetCursor, step: number,
-): Promise<void> {
-  const p = cmd.params;
-  const sc = getStepColor(step);
-  return new Promise(resolve => {
-    switch (cmd.action) {
-      case "draw_text":
-      case "draw_latex": {
-        const isLatex = cmd.action === "draw_latex";
-        const raw = (isLatex ? p.latex : p.text) as string;
-        // Always sanitize — Gemini sometimes sends LaTeX even via draw_text
-        const text = latexToHuman(raw);
-        const x = p.x as number, y = p.y as number;
-        const size = CONTENT_SIZE;
-        const color = isLatex ? sc : TEXT_COLOR;
-        ctx.font = `${size}px ${FONT}`;
-        let i = 0;
-        const tick = () => {
-          if (i >= text.length) {
-            setCursor(c => ({ ...c, show: false }));
-            resolve();
-            return;
-          }
-          const xOff = ctx.measureText(text.slice(0, i)).width;
-          markerText(ctx, text[i], x + xOff, y, color, size);
-          const charW = ctx.measureText(text[i]).width;
-          setCursor({ x: x + xOff + charW, y: y - size * 0.4, show: true, color: sc });
-          i++;
-          setTimeout(tick, CHAR_DELAY);
-        };
-        tick();
-        break;
-      }
-
-      case "draw_line": {
-        const color = (p.color as string) || LINE_COLOR;
-        animatedLine(ctx, p.x1 as number, p.y1 as number, p.x2 as number, p.y2 as number,
-          color, (p.width as number) || 2, LINE_DURATION, setCursor, sc, resolve);
-        break;
-      }
-
-      case "draw_arrow": {
-        const x1 = p.x1 as number, y1 = p.y1 as number,
-          x2 = p.x2 as number, y2 = p.y2 as number;
-        const color = (p.color as string) || LINE_COLOR, w = (p.width as number) || 2;
-        animatedLine(ctx, x1, y1, x2, y2, color, w, LINE_DURATION, setCursor, sc, () => {
-          const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
-          ctx.lineCap = "round";
-          ctx.beginPath(); ctx.moveTo(x2, y2);
-          ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6));
-          markerStroke(ctx, color, w);
-          ctx.beginPath(); ctx.moveTo(x2, y2);
-          ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6));
-          markerStroke(ctx, color, w);
-          resolve();
-        });
-        break;
-      }
-
-      case "draw_circle": {
-        const cx = p.x as number, cy = p.y as number;
-        const pw = (p._pillW as number) || ((p.radius as number) || 30) * 2;
-        const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-        const color = (p.color as string) || sc, w = (p.width as number) || 2;
-        const rr = ph / 2; // corner radius = half height for pill shape
-        const left = cx - pw / 2, top = cy - ph / 2;
-        // Perimeter segments: top, right-arc, bottom, left-arc
-        const perim = pw - ph + Math.PI * rr + pw - ph + Math.PI * rr;
-        const t0 = performance.now();
-        const anim = () => {
-          const prog = Math.min((performance.now() - t0) / SHAPE_DURATION, 1);
-          const len = prog * perim;
-          ctx.lineCap = "round";
-          ctx.beginPath();
-          // Trace pill path progressively
-          let rem = len;
-          // Top edge (left to right)
-          const topW = pw - 2 * rr;
-          if (rem > 0) {
-            const seg = Math.min(rem, topW);
-            ctx.moveTo(left + rr, top);
-            ctx.lineTo(left + rr + seg, top);
-            rem -= seg;
-          }
-          // Right arc
-          if (rem > 0) {
-            const arcLen = Math.PI * rr;
-            const seg = Math.min(rem, arcLen);
-            const ang = (seg / arcLen) * Math.PI;
-            ctx.arc(left + pw - rr, top + rr, rr, -Math.PI / 2, -Math.PI / 2 + ang);
-            rem -= seg;
-          }
-          // Bottom edge (right to left)
-          if (rem > 0) {
-            const seg = Math.min(rem, topW);
-            ctx.lineTo(left + pw - rr - seg, top + ph);
-            rem -= seg;
-          }
-          // Left arc
-          if (rem > 0) {
-            const arcLen = Math.PI * rr;
-            const seg = Math.min(rem, arcLen);
-            const ang = (seg / arcLen) * Math.PI;
-            ctx.arc(left + rr, top + rr, rr, Math.PI / 2, Math.PI / 2 + ang);
-          }
-          markerStroke(ctx, color, w);
-          prog < 1 ? requestAnimationFrame(anim) : resolve();
-        };
-        requestAnimationFrame(anim);
-        break;
-      }
-
-      case "draw_rect": {
-        const rx = p.x as number, ry = p.y as number,
-          rw = p.w as number, rh = p.h as number;
-        const color = (p.color as string) || sc, w = (p.width as number) || 2;
-        const sides: [number, number, number, number][] = [
-          [rx, ry, rx + rw, ry], [rx + rw, ry, rx + rw, ry + rh],
-          [rx + rw, ry + rh, rx, ry + rh], [rx, ry + rh, rx, ry],
-        ];
-        let si = 0;
-        const next = () => {
-          if (si >= sides.length) { resolve(); return; }
-          const [a, b, c, d] = sides[si++];
-          animatedLine(ctx, a, b, c, d, color, w, SHAPE_DURATION / 4, setCursor, sc, next);
-        };
-        next();
-        break;
-      }
-
-      case "highlight":
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = (p.color as string) || "rgba(94,234,212,0.06)";
-        ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
-        resolve();
-        break;
-
-      case "step_marker": {
-        const sx = p.x as number, sy = p.y as number;
-        const label = `Step ${p.step as number}`;
-        ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
-        let i = 0;
-        const tick = () => {
-          if (i >= label.length) { resolve(); return; }
-          const xOff = ctx.measureText(label.slice(0, i)).width;
-          markerText(ctx, label[i], sx + xOff, sy, STEP_LABEL_COLOR, CONTENT_SIZE, true);
-          setCursor({ x: sx + xOff + ctx.measureText(label[i]).width, y: sy - 12, show: true, color: STEP_LABEL_COLOR });
-          i++;
-          setTimeout(tick, 28);
-        };
-        // Draw wavy underline below step label
-        const fullW = ctx.measureText(label).width;
-        drawWavyLine(ctx, sx, sy + 8, sx + fullW, sy + 8, "rgba(94,234,212,0.3)", 1.5);
-        tick();
-        break;
-      }
-
-      case "draw_graph": {
-        const fn = p.fn as string;
-        const label = (p.label as string) || "";
-        const xMin = (p.x_min as number) ?? -5, xMax = (p.x_max as number) ?? 5;
-        const yMin = (p.y_min as number) ?? -5, yMax = (p.y_max as number) ?? 5;
-        const gx = (p.x as number) ?? 60, gy = (p.y as number) ?? 60;
-        const gw = (p.width as number) ?? 500, gh = (p.height as number) ?? 350;
-
-        if (label) {
-          drawGraphLabel(ctx, label, gx, gy, gw, sc);
-        }
-        drawGraphAxes(ctx, gx, gy, gw, gh, xMin, xMax, yMin, yMax);
-
-        // Animate curve
-        const mapX = (v: number) => gx + ((v - xMin) / (xMax - xMin)) * gw;
-        const mapY = (v: number) => gy + gh - ((v - yMin) / (yMax - yMin)) * gh;
-        const SAMPLES = 300;
-        const dx = (xMax - xMin) / SAMPLES;
-        const CURVE_DURATION = 2000;
-        const t0 = performance.now();
-
-        const points: { px: number; py: number; valid: boolean }[] = [];
-        for (let si = 0; si <= SAMPLES; si++) {
-          const xv = xMin + si * dx;
-          const yv = evalMathFn(fn, xv);
-          const valid = !isNaN(yv) && yv >= yMin - 5 && yv <= yMax + 5;
-          points.push({ px: valid ? mapX(xv) : 0, py: valid ? mapY(yv) : 0, valid });
-        }
-
-        let lastDrawn = 0;
-        const animStep = () => {
-          const elapsed = performance.now() - t0;
-          const progress = Math.min(elapsed / CURVE_DURATION, 1);
-          const targetIdx = Math.floor(progress * SAMPLES);
-
-          ctx.lineCap = "round"; ctx.lineJoin = "round";
-          let penDown = false;
-          ctx.beginPath();
-          for (let si = 0; si <= targetIdx; si++) {
-            if (!points[si].valid) { penDown = false; continue; }
-            if (si < lastDrawn && si > 0) { penDown = points[si - 1].valid; continue; }
-            if (!penDown) { ctx.moveTo(points[si].px, points[si].py); penDown = true; }
-            else ctx.lineTo(points[si].px, points[si].py);
-          }
-          markerStroke(ctx, sc, 2.5);
-
-          if (points[targetIdx]?.valid) {
-            setCursor({ x: points[targetIdx].px, y: points[targetIdx].py, show: true, color: sc });
-          }
-
-          lastDrawn = targetIdx;
-          if (progress < 1) {
-            requestAnimationFrame(animStep);
-          } else {
-            setCursor(c => ({ ...c, show: false }));
-            resolve();
-          }
-        };
-        requestAnimationFrame(animStep);
-        break;
-      }
-
-      default: resolve();
-    }
-  });
-}
-
-/* ═══ Animated line (clean, no glow) ═══ */
-
-function animatedLine(
-  ctx: CanvasRenderingContext2D,
-  x1: number, y1: number, x2: number, y2: number,
-  color: string, width: number, dur: number,
-  setCursor: SetCursor, cursorColor: string, onDone: () => void,
-) {
-  const t0 = performance.now();
-  let lx = x1, ly = y1;
-  const step = () => {
-    const prog = Math.min((performance.now() - t0) / dur, 1);
-    const ease = 1 - Math.pow(1 - prog, 3);
-    const cx = x1 + (x2 - x1) * ease, cy = y1 + (y2 - y1) * ease;
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(cx, cy);
-    markerStroke(ctx, color, width);
-    lx = cx; ly = cy;
-    setCursor({ x: cx, y: cy, show: true, color: cursorColor });
-    prog < 1 ? requestAnimationFrame(step) : onDone();
-  };
-  requestAnimationFrame(step);
-}
-
-/* ═══ Instant draw (resize / replay) ═══ */
-
-function drawInstant(
-  ctx: CanvasRenderingContext2D, cmd: WhiteboardCommand,
-  dpr: number, step = 0,
-) {
-  const p = cmd.params;
-  const sc = getStepColor(step);
-  switch (cmd.action) {
-    case "clear":
-      break;
-    case "draw_text":
-      markerText(ctx, latexToHuman(p.text as string), p.x as number, p.y as number,
-        TEXT_COLOR, CONTENT_SIZE);
-      break;
-    case "draw_latex":
-      markerText(ctx, latexToHuman(p.latex as string), p.x as number, p.y as number,
-        sc, CONTENT_SIZE);
-      break;
-    case "draw_line":
-      ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(p.x1 as number, p.y1 as number);
-      ctx.lineTo(p.x2 as number, p.y2 as number);
-      markerStroke(ctx, LINE_COLOR, (p.width as number) || 2);
-      break;
-    case "draw_arrow": {
-      const x1 = p.x1 as number, y1 = p.y1 as number,
-        x2 = p.x2 as number, y2 = p.y2 as number;
-      const w = (p.width as number) || 2;
-      ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
-      markerStroke(ctx, LINE_COLOR, w);
-      const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
-      ctx.beginPath(); ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - h * Math.cos(a - Math.PI / 6), y2 - h * Math.sin(a - Math.PI / 6));
-      markerStroke(ctx, LINE_COLOR, w);
-      ctx.beginPath(); ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - h * Math.cos(a + Math.PI / 6), y2 - h * Math.sin(a + Math.PI / 6));
-      markerStroke(ctx, LINE_COLOR, w);
-      break;
-    }
-    case "draw_circle": {
-      const cx = p.x as number, cy = p.y as number;
-      const pw = (p._pillW as number) || ((p.radius as number) || 30) * 2;
-      const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-      const rr = ph / 2;
-      const left = cx - pw / 2, top = cy - ph / 2;
-      ctx.beginPath();
-      ctx.moveTo(left + rr, top);
-      ctx.lineTo(left + pw - rr, top);
-      ctx.arc(left + pw - rr, top + rr, rr, -Math.PI / 2, Math.PI / 2);
-      ctx.lineTo(left + rr, top + ph);
-      ctx.arc(left + rr, top + rr, rr, Math.PI / 2, -Math.PI / 2 + 2 * Math.PI);
-      ctx.closePath();
-      markerStroke(ctx, sc, (p.width as number) || 2);
-      break;
-    }
-    case "draw_rect":
-      ctx.beginPath();
-      ctx.rect(p.x as number, p.y as number, p.w as number, p.h as number);
-      markerStroke(ctx, sc, (p.width as number) || 2);
-      break;
-    case "highlight":
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(94,234,212,0.06)";
-      ctx.fillRect(p.x as number, p.y as number, p.w as number, p.h as number);
-      break;
-    case "step_marker":
-      markerText(ctx, `Step ${p.step as number}`, p.x as number, p.y as number,
-        STEP_LABEL_COLOR, CONTENT_SIZE, true);
-      // Wavy underline
-      ctx.font = `bold ${CONTENT_SIZE}px ${FONT}`;
-      drawWavyLine(ctx, p.x as number, (p.y as number) + 8,
-        (p.x as number) + ctx.measureText(`Step ${p.step as number}`).width, (p.y as number) + 8,
-        "rgba(94,234,212,0.3)", 1.5);
-      break;
-    case "question_header": {
-      const qText = extractMath((p.text as string) || "");
-      const label = (p._label as string) || "";
-      const qX = (p._x as number) || 20;
-      const qY = (p._y as number) || 22;
-      const colWidth = (p._colWidth as number) || 320;
-      // Label badge
-      if (label) {
-        ctx.font = `bold 15px ${FONT}`;
-        const lw = ctx.measureText(label).width;
-        ctx.fillStyle = "rgba(99,102,241,0.15)";
-        ctx.beginPath();
-        ctx.roundRect(qX, qY - 13, lw + 12, 20, 6);
-        ctx.fill();
-        markerText(ctx, label, qX + 6, qY + 2, "#818cf8", 15);
-        // Math expression
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        markerText(ctx, qText, qX + lw + 20, qY + 2, TEXT_COLOR, CONTENT_SIZE);
-      } else {
-        ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-        markerText(ctx, qText, qX, qY, TEXT_COLOR, CONTENT_SIZE);
-      }
-      // Underline
-      ctx.beginPath();
-      ctx.moveTo(qX, qY + 12);
-      ctx.lineTo(qX + colWidth - 40, qY + 12);
-      markerStroke(ctx, "rgba(148,163,184,0.15)", 1);
-      break;
-    }
-    case "draw_graph": {
-      const fn = p.fn as string;
-      const label = (p.label as string) || "";
-      const xMin = (p.x_min as number) ?? -5, xMax = (p.x_max as number) ?? 5;
-      const yMin = (p.y_min as number) ?? -5, yMax = (p.y_max as number) ?? 5;
-      const gx = (p.x as number) ?? 60, gy = (p.y as number) ?? 60;
-      const gw = (p.width as number) ?? 500, gh = (p.height as number) ?? 350;
-      if (label) drawGraphLabel(ctx, label, gx, gy, gw, sc);
-      drawGraphAxes(ctx, gx, gy, gw, gh, xMin, xMax, yMin, yMax);
-      drawGraphCurve(ctx, fn, gx, gy, gw, gh, xMin, xMax, yMin, yMax, sc);
-      break;
-    }
-  }
-}
-
-/* ═══ Background ═══ */
-
-function clearBoard(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, w, h);
-  // Dot-grid pattern (graph-paper feel)
-  const s = 40;
-  ctx.fillStyle = "rgba(148,163,184,0.06)";
-  for (let x = s; x < w; x += s) {
-    for (let y = s; y < h; y += s) {
-      ctx.beginPath();
-      ctx.arc(x, y, 1.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  return maxY;
 }
