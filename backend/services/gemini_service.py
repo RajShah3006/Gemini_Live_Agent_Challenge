@@ -640,13 +640,11 @@ class GeminiSession:
             pass
         except Exception as e:
             error_str = str(e)
-            # 1011 and 1008 are expected for native audio model — just reconnect quietly
-            if "1011" in error_str or "internal" in error_str.lower():
+            # 1000, 1011, 1008 are all expected closures — reconnect quietly
+            recoverable = any(code in error_str for code in ("1000", "1011", "1008")) or \
+                          any(kw in error_str.lower() for kw in ("internal", "policy", "normal closure"))
+            if recoverable:
                 logger.info(f"Live API session ended (expected): {error_str[:80]}")
-                if await self._reconnect():
-                    return
-            elif "1008" in error_str or "policy" in error_str.lower():
-                logger.info(f"Live API policy error (expected): {error_str[:80]}")
                 if await self._reconnect():
                     return
             else:
