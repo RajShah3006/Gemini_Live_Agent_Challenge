@@ -251,15 +251,18 @@ _STUDENT_QUESTION_RE = re.compile(
 
 
 def _asks_student_question(text: str) -> bool:
-    """Return True if the AI's response asks the student a direct question."""
+    """Return True if the AI's response asks the student a direct question.
+    
+    In teacher mode (the only caller), any response ending with '?' is
+    almost certainly a question directed at the student, since the system
+    prompt explicitly instructs the AI to ask after each step.
+    """
     if not text:
         return False
     # Check the last ~300 chars (the tail of the response is where questions live)
     tail = text[-300:].strip()
-    # Must end with "?" to be a question
-    if not tail.endswith("?"):
-        return False
-    return bool(_STUDENT_QUESTION_RE.search(tail))
+    # In teacher mode, ending with "?" is sufficient — the prompt tells the AI to ask
+    return tail.endswith("?")
 
 
 def _build_image_prompt(user_text: str | None) -> str:
@@ -399,6 +402,7 @@ class GeminiSession:
             await self.on_status({"speaking": True})
             total_cmds = 0
             transcript_emitted = False
+            all_text_parts: list[str] = []  # accumulate across ALL rounds
 
             try:
                 # Standard API: model returns ALL tool calls in one response.
@@ -421,12 +425,13 @@ class GeminiSession:
 
                     # Separate function calls from text
                     function_calls = []
-                    text_parts = []
+                    round_text_parts = []
                     for part in (model_content.parts or []):
                         if part.function_call:
                             function_calls.append(part)
                         elif part.text:
-                            text_parts.append(part.text)
+                            round_text_parts.append(part.text)
+                    all_text_parts.extend(round_text_parts)
 
                     # Forward whiteboard commands to frontend
                     function_response_parts = []
@@ -450,8 +455,8 @@ class GeminiSession:
                         )
 
                     # Send text transcript if any
-                    if text_parts:
-                        full_text = " ".join(text_parts)
+                    if round_text_parts:
+                        full_text = " ".join(round_text_parts)
                         logger.info(f"  WB transcript: {full_text[:100]}...")
                         await self.on_transcript("tutor", full_text)
                         transcript_emitted = True
@@ -481,8 +486,8 @@ class GeminiSession:
             finally:
                 # Detect if AI asked a question BEFORE signaling turn_complete
                 is_asking = False
-                if self._mode == "teacher" and text_parts:
-                    combined_text = " ".join(text_parts)
+                if self._mode == "teacher" and all_text_parts:
+                    combined_text = " ".join(all_text_parts)
                     if _asks_student_question(combined_text):
                         self._awaiting_student_answer = True
                         is_asking = True
@@ -644,14 +649,19 @@ class GeminiSession:
 
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                 self._speaking = False
-                await self.on_status({"speaking": False, "turn_complete": True})
-                # Check if voice AI asked the student a question before clearing buffers
-                if self._audio_transcript_buf:
+                # Check if voice AI asked the student a question BEFORE signaling turn_complete
+                is_asking = False
+                if self._mode == "teacher" and self._audio_transcript_buf:
                     voice_text = " ".join(self._audio_transcript_buf)
                     if _asks_student_question(voice_text):
                         self._awaiting_student_answer = True
-                        await self.on_status({"awaiting_answer": True})
+                        is_asking = True
                         logger.info("[Voice] AI asked a question — next input is a continuation")
+                # Send everything in ONE atomic status message
+                status: dict = {"speaking": False, "turn_complete": True}
+                if is_asking:
+                    status["awaiting_answer"] = True
+                await self.on_status(status)
                 # Sync voice context to whiteboard history for follow-up questions
                 self._sync_voice_context()
 
