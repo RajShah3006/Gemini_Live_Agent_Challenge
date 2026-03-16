@@ -344,21 +344,38 @@ class GeminiSession:
             self._health_task = asyncio.create_task(self._health_loop())
 
     async def _health_loop(self):
-        """Background monitor: checks Live API health every 15s, auto-reconnects if down."""
+        """Background monitor: keeps Live API alive and auto-reconnects if down."""
+        # 90 bytes of silence (16-bit PCM, mono) — enough to reset idle timer
+        SILENCE = b"\x00" * 90
         while not self._closed:
             await asyncio.sleep(15)
             if self._closed:
                 break
-            # If no session and not currently connecting, proactively reconnect
+            # Session alive → send silent keepalive to prevent idle timeout
+            if self._session and not self._connecting:
+                try:
+                    await self._session.send(input={"data": SILENCE, "mime_type": "audio/pcm"})
+                    logger.debug("[Voice] Keepalive sent")
+                except Exception as e:
+                    logger.info(f"[Voice] Keepalive failed (session likely dead): {e}")
+                    # Clean up stale session so reconnect block below picks it up
+                    try:
+                        if self._ctx:
+                            await self._ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    self._session = None
+                    self._ctx = None
+            # Session down → reconnect
             if not self._session and not self._connecting:
                 logger.info("[Voice] Health check: session down — reconnecting...")
+                await self.on_status({"voice_ready": False})
                 try:
                     await self.connect()
                     await self.on_status({"voice_ready": True, "reconnected": True})
                     logger.info("[Voice] Health check: reconnected successfully")
                 except Exception as e:
                     logger.warning(f"[Voice] Health check reconnect failed: {e}")
-                    await self.on_status({"voice_ready": False})
 
     # ═══════════════════════════════════════════════════════════
     #  STANDARD API — text & image (zero connection issues)
@@ -640,17 +657,26 @@ class GeminiSession:
             pass
         except Exception as e:
             error_str = str(e)
-            # 1000, 1011, 1008 are all expected closures — reconnect quietly
+            # 1000, 1011, 1008 are all expected closures — clean up silently
             recoverable = any(code in error_str for code in ("1000", "1011", "1008")) or \
                           any(kw in error_str.lower() for kw in ("internal", "policy", "normal closure"))
             if recoverable:
                 logger.info(f"Live API session ended (expected): {error_str[:80]}")
-                if await self._reconnect():
-                    return
+                # Clean up stale session — health loop will reconnect within 15s
+                try:
+                    self._receive_task = None
+                    if self._ctx:
+                        await self._ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                self._session = None
+                self._ctx = None
+                await self.on_status({"voice_ready": False, "speaking": False})
+                return  # health loop handles reconnect
             else:
                 logger.error(f"Live API unexpected error: {error_str}")
-            # Only notify frontend if ALL reconnect attempts failed
-            await self.on_status({"error": f"Voice session lost — {error_str[:180]}", "speaking": False})
+                # Only notify frontend of truly unexpected errors
+                await self.on_status({"error": f"Voice session lost — {error_str[:180]}", "speaking": False})
 
     async def _handle_response(self, response):
         """Process a single Live API response."""
