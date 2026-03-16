@@ -356,7 +356,6 @@ async def websocket_session(ws: WebSocket):
                 await session.set_mode(new_mode)
 
             elif msg_type == "tts_toggle":
-                nonlocal tts_enabled
                 tts_enabled = bool(payload.get("enabled", False))
                 logger.info(f"TTS {'enabled' if tts_enabled else 'disabled'}")
 
