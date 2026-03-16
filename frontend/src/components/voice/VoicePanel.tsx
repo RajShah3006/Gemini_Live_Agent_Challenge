@@ -32,6 +32,7 @@ interface VoicePanelProps {
   onToggleAutoMic: () => void;
   onInterrupt?: () => void;
   onModeChange?: (mode: "teacher" | "quick") => void;
+  awaitingAnswer?: boolean;
   questions?: QuestionInfo[];
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   textInput: string;
@@ -52,6 +53,7 @@ export function VoicePanel({
   onToggleAutoMic,
   onInterrupt,
   onModeChange,
+  awaitingAnswer = false,
   questions = [],
   inputRef,
   textInput,
@@ -277,10 +279,10 @@ export function VoicePanel({
 
       {/* ── Middle Tier: Dominant Input Field ── */}
       <div 
-        className="relative flex items-end rounded-2xl w-full transition-shadow focus-within:ring-2 focus-within:ring-indigo-500/50 shadow-sm hover:shadow-md"
+        className={`relative flex items-end rounded-2xl w-full transition-shadow focus-within:ring-2 focus-within:ring-indigo-500/50 shadow-sm hover:shadow-md${awaitingAnswer ? " ring-2 ring-amber-400/60 animate-pulse" : ""}`}
         style={{
           background: "var(--bg-elevated)",
-          border: "1px solid var(--border)",
+          border: awaitingAnswer ? "1px solid rgba(251,191,36,0.5)" : "1px solid var(--border)",
         }}
       >
         {inputMode === "text" ? (
@@ -297,9 +299,11 @@ export function VoicePanel({
               }
             }}
             placeholder={
-              questions.length > 0
-                ? "Ask a follow-up, Shift+Enter for new line…"
-                : "Ask a math question, e.g. 'Differentiate tan²x step by step'…"
+              awaitingAnswer
+                ? "Type your answer… 🤔"
+                : questions.length > 0
+                  ? "Ask a follow-up, Shift+Enter for new line…"
+                  : "Ask a math question, e.g. 'Differentiate tan²x step by step'…"
             }
             rows={1}
             className="flex-1 max-h-[160px] min-h-[48px] bg-transparent resize-none rounded-2xl py-3.5 pl-4 pr-14 text-[15px] outline-none scrollbar-none"

@@ -488,44 +488,17 @@ export function animateCmd(
 
       case "draw_circle": {
         const cx = p.x as number, cy = p.y as number;
-        const pw = (p._pillW as number) || ((p.radius as number) || 30) * 2;
-        const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-        const color = (p.color as string) || sc, w = (p.width as number) || 2;
-        const rr = ph / 2;
-        const left = cx - pw / 2, top = cy - ph / 2;
-        const perim = pw - ph + Math.PI * rr + pw - ph + Math.PI * rr;
+        const r = (p.radius as number) || 30;
+        const color = (p.color as string) || "#fbbf24";
+        const w = (p.width as number) || 2.5;
+        const perim = 2 * Math.PI * r;
         const t0 = performance.now();
         const anim = () => {
           const prog = Math.min((performance.now() - t0) / SHAPE_DURATION, 1);
-          const len = prog * perim;
+          const endAngle = -Math.PI / 2 + prog * 2 * Math.PI;
           ctx.lineCap = "round";
           ctx.beginPath();
-          let rem = len;
-          const topW = pw - 2 * rr;
-          if (rem > 0) {
-            const seg = Math.min(rem, topW);
-            ctx.moveTo(left + rr, top);
-            ctx.lineTo(left + rr + seg, top);
-            rem -= seg;
-          }
-          if (rem > 0) {
-            const arcLen = Math.PI * rr;
-            const seg = Math.min(rem, arcLen);
-            const ang = (seg / arcLen) * Math.PI;
-            ctx.arc(left + pw - rr, top + rr, rr, -Math.PI / 2, -Math.PI / 2 + ang);
-            rem -= seg;
-          }
-          if (rem > 0) {
-            const seg = Math.min(rem, topW);
-            ctx.lineTo(left + pw - rr - seg, top + ph);
-            rem -= seg;
-          }
-          if (rem > 0) {
-            const arcLen = Math.PI * rr;
-            const seg = Math.min(rem, arcLen);
-            const ang = (seg / arcLen) * Math.PI;
-            ctx.arc(left + rr, top + rr, rr, Math.PI / 2, Math.PI / 2 + ang);
-          }
+          ctx.arc(cx, cy, r, -Math.PI / 2, endAngle);
           markerStroke(ctx, color, w);
           prog < 1 ? requestAnimationFrame(anim) : resolve();
         };
@@ -719,18 +692,11 @@ export function drawInstant(
     }
     case "draw_circle": {
       const cx = p.x as number, cy = p.y as number;
-      const pw = (p._pillW as number) || ((p.radius as number) || 30) * 2;
-      const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-      const rr = ph / 2;
-      const left = cx - pw / 2, top = cy - ph / 2;
+      const r = (p.radius as number) || 30;
       ctx.beginPath();
-      ctx.moveTo(left + rr, top);
-      ctx.lineTo(left + pw - rr, top);
-      ctx.arc(left + pw - rr, top + rr, rr, -Math.PI / 2, Math.PI / 2);
-      ctx.lineTo(left + rr, top + ph);
-      ctx.arc(left + rr, top + rr, rr, Math.PI / 2, -Math.PI / 2 + 2 * Math.PI);
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
       ctx.closePath();
-      markerStroke(ctx, sc, (p.width as number) || 2);
+      markerStroke(ctx, "#fbbf24", (p.width as number) || 2.5);
       break;
     }
     case "draw_rect":

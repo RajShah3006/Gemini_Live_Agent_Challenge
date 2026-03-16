@@ -314,11 +314,20 @@ class GeminiSession:
             reconnect_task = asyncio.create_task(self._reconnect())
             self._reconnect_task = reconnect_task
 
-    def set_mode(self, mode: str):
+    async def set_mode(self, mode: str):
         """Switch between 'teacher' and 'quick' mode."""
-        if mode in ("teacher", "quick"):
-            self._mode = mode
-            logger.info(f"Mode changed to: {mode}")
+        if mode not in ("teacher", "quick"):
+            return
+        old_mode = self._mode
+        self._mode = mode
+        logger.info(f"Mode changed to: {mode}")
+        # Clear awaiting state when switching to quick — AI doesn't ask questions
+        if mode == "quick" and self._awaiting_student_answer:
+            self._awaiting_student_answer = False
+            await self.on_status({"awaiting_answer": False})
+        # If Live API session is active, reconnect with new system instruction
+        if self._session and old_mode != mode:
+            asyncio.create_task(self._reconnect())
 
     # ═══════════════════════════════════════════════════════════
     #  STANDARD API — text & image (zero connection issues)

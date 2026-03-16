@@ -313,7 +313,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
         return sx + ctx.measureText(`Step ${p.step}`).width + 40;
       }
       case "draw_circle":
-        return (p.x as number) + ((p._pillW as number) || ((p.radius as number) || 30));
+        return (p.x as number) + ((p.radius as number) || 30);
       default:
         return 0;
     }
@@ -721,8 +721,6 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
       if (typeof offsetCmd.params.y1 === "number") offsetCmd.params.y1 += syOff;
       if (typeof offsetCmd.params.x2 === "number") offsetCmd.params.x2 += sxOff;
       if (typeof offsetCmd.params.y2 === "number") offsetCmd.params.y2 += syOff;
-      offsetCmd.params._pillW = section ? (gridColWidthsRef.current[section.col] || CELL_MIN_W) : CELL_MIN_W;
-      offsetCmd.params._pillH = section ? (gridRowHeightsRef.current[section.row] || 0) : 0;
 
       // Track cell dimensions and grow canvas
       trackCellSize(ctx, offsetCmd);
@@ -1021,8 +1019,8 @@ function offsetCommand(cmd: WhiteboardCommand, yOff: number, xOff: number): Whit
 function getCommandY(cmd: WhiteboardCommand): number {
   const p = cmd.params;
   if (cmd.action === "draw_circle") {
-    const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-    return (p.y as number) + ph / 2;
+    const r = (p.radius as number) || 30;
+    return (p.y as number) + r;
   }
   if (p.y !== undefined) {
     if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);

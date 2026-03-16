@@ -186,6 +186,7 @@ export default function Home() {
     autoMicEnabled,
     toggleAutoMic,
     sendMode,
+    awaitingAnswer,
   } = useSession();
 
   const [showHistory, setShowHistory] = useState(false);
@@ -523,6 +524,7 @@ export default function Home() {
           textInput={composerText}
           onTextInputChange={setComposerText}
           onModeChange={sendMode}
+          awaitingAnswer={awaitingAnswer}
         />
       </div>
 

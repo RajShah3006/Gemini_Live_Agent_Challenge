@@ -49,6 +49,10 @@ export function useSession() {
 
   // Track when the AI has asked the student a question — next input continues same page
   const awaitingAnswerRef = useRef(false);
+  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
+
+  // Track current mode so we can sync it on (re)connect
+  const currentModeRef = useRef<"teacher" | "quick">("teacher");
 
   // [Fix 1] Thinking timeout ref
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -167,9 +171,9 @@ export function useSession() {
             if (msg.payload.turn_complete) {
               setIsThinking(false);
             }
-            if (msg.payload.awaiting_answer) {
-              // AI asked the student a question — next input stays on same page
-              awaitingAnswerRef.current = true;
+            if (msg.payload.awaiting_answer !== undefined) {
+              awaitingAnswerRef.current = !!msg.payload.awaiting_answer;
+              setAwaitingAnswer(!!msg.payload.awaiting_answer);
             }
             if (msg.payload.error) {
               setErrorMessage(msg.payload.error as string);
@@ -225,6 +229,11 @@ export function useSession() {
         // Mic is lazily initialized on first push-to-talk interaction
         // (see startTalking) — NOT on connect — to avoid browser permission
         // popup glitch.
+
+        // Sync mode to backend on connect (in case user changed before connecting)
+        if (currentModeRef.current !== "teacher") {
+          ws.send(JSON.stringify({ type: "set_mode", payload: { mode: currentModeRef.current } }));
+        }
       };
       ws.onclose = () => {
         // Stop heartbeat
@@ -338,6 +347,7 @@ export function useSession() {
     setIsListening(false);
     pendingAutoSpeakRef.current = false;
     awaitingAnswerRef.current = false;
+    setAwaitingAnswer(false);
     stopAudio();
     stopBrowserSpeech();
     clearThinking();
@@ -360,6 +370,7 @@ export function useSession() {
       // emit student_answer (continues same page) instead of question_header (new page).
       const isAnswer = awaitingAnswerRef.current;
       awaitingAnswerRef.current = false;
+      setAwaitingAnswer(false);
 
       setWhiteboardCommands((prev) => [
         ...prev,
@@ -393,6 +404,10 @@ export function useSession() {
 
   const sendMode = useCallback(
     (mode: "teacher" | "quick") => {
+      currentModeRef.current = mode;
+      // Clear awaiting state on mode switch (frontend side)
+      awaitingAnswerRef.current = false;
+      setAwaitingAnswer(false);
       send("set_mode", { mode });
     },
     [send],
@@ -420,5 +435,6 @@ export function useSession() {
     toggleAutoMic,
     voiceCommand,
     sendMode,
+    awaitingAnswer,
   };
 }

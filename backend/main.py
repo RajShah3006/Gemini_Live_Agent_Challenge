@@ -339,7 +339,7 @@ async def websocket_session(ws: WebSocket):
 
             elif msg_type == "set_mode":
                 new_mode = payload.get("mode", "teacher")
-                session.set_mode(new_mode)
+                await session.set_mode(new_mode)
 
             elif msg_type == "control":
                 action = payload.get("action", "")
