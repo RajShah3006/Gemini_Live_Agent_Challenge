@@ -152,13 +152,12 @@ export function useSession() {
               setIsSpeaking(msg.payload.speaking as boolean);
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
-            if (msg.payload.connected !== undefined)
-              setIsConnected(msg.payload.connected as boolean);
+            // Ignore backend Gemini-level connected/reconnecting — WS onopen/onclose handles our connection status
             if (msg.payload.reconnected) {
               console.log("[SESSION] Gemini auto-reconnected successfully");
             }
             if (msg.payload.reconnecting) {
-              console.log("[SESSION] Gemini reconnecting...");
+              console.log("[SESSION] Gemini reconnecting (internal)...");
             }
             // Flush audio queue on interruption
             if (msg.payload.interrupted) {
@@ -211,9 +210,21 @@ export function useSession() {
         setIsConnected(true);
         setConnectionStatus("connected");
         reconnectAttemptRef.current = 0;
+        // Start heartbeat to keep WS alive (prevents backend idle timeout + Cloud Run timeout)
+        if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping", payload: {} }));
+          }
+        }, 25_000); // every 25s — well within 5min backend timeout
         startMic();
       };
       ws.onclose = () => {
+        // Stop heartbeat
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+        }
         setIsConnected(false);
         setIsListening(false);
         setIsSpeaking(false);
@@ -240,6 +251,10 @@ export function useSession() {
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
     reconnectAttemptRef.current = 0;
     stopMic();
     stopAudio();
@@ -349,6 +364,7 @@ export function useSession() {
   useEffect(() => {
     return () => {
       stopMic();
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
       wsRef.current?.close();
     };
   }, [stopMic]);

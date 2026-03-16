@@ -519,17 +519,16 @@ class GeminiSession:
             # 1011 and 1008 are expected for native audio model — just reconnect quietly
             if "1011" in error_str or "internal" in error_str.lower():
                 logger.info(f"Live API session ended (expected): {error_str[:80]}")
-                await self.on_status({"reconnecting": True})
                 if await self._reconnect():
                     return
             elif "1008" in error_str or "policy" in error_str.lower():
                 logger.info(f"Live API policy error (expected): {error_str[:80]}")
-                await self.on_status({"reconnecting": True})
                 if await self._reconnect():
                     return
             else:
                 logger.error(f"Live API unexpected error: {error_str}")
-            await self.on_status({"error": f"Voice session lost: {error_str[:100]}", "connected": False})
+            # Only notify frontend if ALL reconnect attempts failed
+            await self.on_status({"error": f"Voice session lost — please try again", "speaking": False})
 
     async def _handle_response(self, response):
         """Process a single Live API response."""
@@ -590,8 +589,6 @@ class GeminiSession:
                         logger.info("[Voice] AI asked a question — next input is a continuation")
                 # Sync voice context to whiteboard history for follow-up questions
                 self._sync_voice_context()
-                # Proactive teardown — native audio model drops idle connections anyway
-                asyncio.create_task(self._teardown_session())
 
     def _sync_voice_context(self):
         """Add voice conversation context to whiteboard history so text follow-ups have context."""
