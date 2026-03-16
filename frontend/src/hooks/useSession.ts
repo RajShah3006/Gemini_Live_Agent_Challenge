@@ -85,6 +85,23 @@ export function useSession() {
     }
   }, []);
 
+  // Browser TTS for text-mode responses (standard API has no native audio)
+  const speakText = useCallback(
+    (text: string) => {
+      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      // Don't speak if voice (Live API) is active — it has its own audio
+      if (micActiveRef.current) return;
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.05;
+      utt.pitch = 1.0;
+      activeUtteranceRef.current = utt;
+      utt.onend = () => { activeUtteranceRef.current = null; };
+      window.speechSynthesis.speak(utt);
+    },
+    [],
+  );
+
   const sendAudioChunk = useCallback(
     (base64: string) => {
       if (micActiveRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -145,12 +162,17 @@ export function useSession() {
               msg.payload as unknown as WhiteboardCommand,
             ]);
             break;
-          case "transcript":
-            addTranscript(
-              (msg.payload.role as "user" | "tutor") || "tutor",
-              msg.payload.text as string,
-            );
+          case "transcript": {
+            const role = (msg.payload.role as "user" | "tutor") || "tutor";
+            const text = msg.payload.text as string;
+            addTranscript(role, text);
+            // Browser TTS for text-mode responses when auto-speak was requested
+            if (role === "tutor" && pendingAutoSpeakRef.current) {
+              speakText(text);
+              pendingAutoSpeakRef.current = false;
+            }
             break;
+          }
           case "status":
             if (msg.payload.speaking !== undefined)
               setIsSpeaking(msg.payload.speaking as boolean);
@@ -197,7 +219,7 @@ export function useSession() {
         console.error("Failed to parse server message");
       }
     },
-    [addTranscript, playChunk, stopAudio],
+    [addTranscript, playChunk, stopAudio, speakText],
   );
 
   // Keep a stable ref to handleMessage so the WS onmessage callback always

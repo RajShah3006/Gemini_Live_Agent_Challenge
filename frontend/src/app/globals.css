@@ -109,3 +109,11 @@ body {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
 }
+
+/* Mobile responsive overrides */
+@media (max-width: 768px) {
+  /* Whiteboard cards take full width on mobile */
+  .whiteboard-container { min-width: 0 !important; }
+  /* Bottom bar padding for notch devices */
+  .bottom-bar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+}
