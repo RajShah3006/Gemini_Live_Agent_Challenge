@@ -719,7 +719,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
         break;
       }
       case "undo":
-        // Remove last command
+        handleUndo();
         break;
     }
   }, [voiceCommand]);

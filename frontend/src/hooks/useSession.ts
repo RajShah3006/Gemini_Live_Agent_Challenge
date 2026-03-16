@@ -42,6 +42,7 @@ export function useSession() {
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const micActiveRef = useRef(false);
   const micInitializedRef = useRef(false); // [Fix 3] Lazy mic init
+  const thinkingRequestIdRef = useRef<string | null>(null);
 
   // Auto-mic: open the mic automatically after the AI finishes responding
   // [Fix 5] Default to OFF — most users type, not talk
@@ -67,11 +68,13 @@ export function useSession() {
   // [Fix 2] Heartbeat refs
   const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastMessageAtRef = useRef(Date.now()); // tracks last message from server
+  const lastNonHeartbeatAtRef = useRef(Date.now()); // excludes pong
 
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [voiceReady, setVoiceReady] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connected" | "reconnecting" | "failed">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [whiteboardCommands, setWhiteboardCommands] = useState<
@@ -80,6 +83,7 @@ export function useSession() {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
   const [autoMicEnabled, setAutoMicEnabled] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   // TTS toggle: when on, backend sends synthesized audio for text-mode responses
   const [ttsEnabled, setTtsEnabled] = useState(true);
@@ -163,18 +167,28 @@ export function useSession() {
     setIsThinking(false);
   }, []);
 
-  const startThinking = useCallback(() => {
+  const startThinking = useCallback((requestId?: string, opts?: { timeoutMs?: number }) => {
     setIsThinking(true);
+    thinkingRequestIdRef.current = requestId ?? null;
     if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
     if (thinkingErrorTimerRef.current) clearTimeout(thinkingErrorTimerRef.current);
     thinkingTimerRef.current = setTimeout(() => {
+      // Only show "no response" if we've had no real server activity recently.
+      // Heartbeats (pong) should not count as progress.
+      const since = Date.now() - lastNonHeartbeatAtRef.current;
+      if (since < 10_000) {
+        // Still getting meaningful messages; extend quietly.
+        startThinking(requestId, opts);
+        return;
+      }
       setIsThinking(false);
+      thinkingRequestIdRef.current = null;
       setErrorMessage("No response received — try again");
       thinkingErrorTimerRef.current = setTimeout(() => {
         setErrorMessage(null);
         thinkingErrorTimerRef.current = null;
       }, 5000);
-    }, 20_000);
+    }, opts?.timeoutMs ?? 45_000);
   }, []);
 
   const addTranscript = useCallback(
@@ -206,10 +220,15 @@ export function useSession() {
   const handleMessage = useCallback(
     (event: MessageEvent) => {
       try {
+        lastMessageAtRef.current = Date.now();
         const msg: ServerMessage = JSON.parse(event.data);
+        if (msg.type !== "pong") {
+          lastNonHeartbeatAtRef.current = Date.now();
+        }
         switch (msg.type) {
           case "whiteboard":
             clearThinking();
+            thinkingRequestIdRef.current = null;
             setWhiteboardCommands((prev) => [
               ...prev,
               msg.payload as unknown as WhiteboardCommand,
@@ -230,12 +249,19 @@ export function useSession() {
               setIsSpeaking(msg.payload.speaking as boolean);
             if (msg.payload.listening !== undefined)
               setIsListening(msg.payload.listening as boolean);
+            if (msg.payload.session_id) {
+              setSessionId(String(msg.payload.session_id));
+            }
             // Ignore backend Gemini-level connected/reconnecting — WS onopen/onclose handles our connection status
             if (msg.payload.reconnected) {
               console.log("[SESSION] Gemini auto-reconnected successfully");
             }
             if (msg.payload.reconnecting) {
               console.log("[SESSION] Gemini reconnecting (internal)...");
+            }
+            // Track voice (Live API) readiness
+            if (msg.payload.voice_ready !== undefined) {
+              setVoiceReady(!!msg.payload.voice_ready);
             }
             // Flush audio queue on interruption
             if (msg.payload.interrupted) {
@@ -248,7 +274,12 @@ export function useSession() {
               setAwaitingAnswer(!!msg.payload.awaiting_answer);
             }
             if (msg.payload.turn_complete) {
-              clearThinking();
+              // If server tags a request id, only clear if it matches; otherwise clear anyway.
+              const rid = msg.payload.request_id ? String(msg.payload.request_id) : null;
+              if (!rid || !thinkingRequestIdRef.current || rid === thinkingRequestIdRef.current) {
+                clearThinking();
+                thinkingRequestIdRef.current = null;
+              }
             }
             if (msg.payload.error) {
               setErrorMessage(msg.payload.error as string);
@@ -258,6 +289,7 @@ export function useSession() {
             break;
           case "audio":
             clearThinking();
+            thinkingRequestIdRef.current = null;
             if (msg.payload.data) {
               playChunk(msg.payload.data as string);
             }
@@ -266,6 +298,9 @@ export function useSession() {
             if (msg.payload.data) {
               playTtsAudio(msg.payload.data as string);
             }
+            break;
+          case "pong":
+            // heartbeat response — already updated lastMessageAtRef
             break;
           case "error":
             console.error("Server error:", msg.payload);
@@ -331,6 +366,7 @@ export function useSession() {
         setIsConnected(false);
         setIsListening(false);
         setIsSpeaking(false);
+        setVoiceReady(false);
         stopMic();
         micInitializedRef.current = false; // allow re-init on next push-to-talk
         stopAudio();
@@ -384,7 +420,8 @@ export function useSession() {
 
   const stopTalking = useCallback(() => {
     setIsListening(false);
-    startThinking();
+    // Voice can legitimately take longer; only error if we get no real server activity.
+    startThinking(undefined, { timeoutMs: 90_000 });
     // Clean up any previous mic delay timer
     if (micDelayTimerRef.current) clearTimeout(micDelayTimerRef.current);
     // Keep micActiveRef true for 600ms so silence frames flow to the Live API.
@@ -426,7 +463,12 @@ export function useSession() {
   );
 
   const sendImage = useCallback(
-    (base64: string) => {
+    (base64: string, text?: string) => {
+      const request_id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const promptText = (text || "").trim();
       const isAnswer = awaitingAnswerRef.current;
       awaitingAnswerRef.current = false;
       setAwaitingAnswer(false);
@@ -438,9 +480,9 @@ export function useSession() {
           params: { text: "Image question" },
         },
       ]);
-      send("image", { data: base64 });
-      addTranscript("user", "📷 Uploaded an image");
-      startThinking();
+      send("image", { data: base64, text: promptText, request_id });
+      addTranscript("user", promptText ? `📷 ${promptText}` : "📷 Uploaded an image");
+      startThinking(request_id);
     },
     [send, addTranscript, setWhiteboardCommands, startThinking],
   );
@@ -462,6 +504,10 @@ export function useSession() {
     (text: string) => {
       const cleaned = normalizeInput(text);
       if (!cleaned.trim()) return;
+      const request_id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
       micActiveRef.current = false;
       setIsListening(false);
@@ -483,9 +529,9 @@ export function useSession() {
           params: { text: cleaned },
         },
       ]);
-      send("text", { text: cleaned });
+      send("text", { text: cleaned, request_id });
       addTranscript("user", cleaned);
-      startThinking();
+      startThinking(request_id);
     },
     [send, addTranscript, startThinking],
   );
@@ -536,6 +582,7 @@ export function useSession() {
     isListening,
     isSpeaking,
     isThinking,
+    voiceReady,
     connectionStatus,
     errorMessage,
     connect,
@@ -552,6 +599,7 @@ export function useSession() {
     autoMicEnabled,
     toggleAutoMic,
     voiceCommand,
+    sessionId,
     sendMode,
     awaitingAnswer,
     ttsEnabled,

@@ -214,7 +214,7 @@ RULES:
 GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220.
 START DRAWING IMMEDIATELY. Be fast and direct."""
 
-AUDIO_MODEL = "gemini-2.5-flash-native-audio-latest"
+AUDIO_MODEL = cfg.__dict__.get("AUDIO_MODEL") or "gemini-2.5-flash-native-audio-latest"
 WHITEBOARD_MODEL = "gemini-2.5-flash-lite"
 STANDARD_API_RETRIES = 3
 LIVE_CONNECT_RETRIES = 3
@@ -284,8 +284,10 @@ class GeminiSession:
         self._session = None
         self._ctx = None
         self._receive_task: asyncio.Task | None = None
+        self._health_task: asyncio.Task | None = None
         self._connecting = False
         self._speaking = False
+        self._closed = False
         self._audio_transcript_buf: list[str] = []  # capture voice model text
 
         # ── Standard API state (text/image → whiteboard) ──
@@ -327,11 +329,42 @@ class GeminiSession:
         if self._session and old_mode != mode:
             asyncio.create_task(self._reconnect())
 
+    async def start_voice(self):
+        """Eagerly connect the Live API so voice is ready immediately.
+        Also starts a background health monitor that auto-reconnects if the session drops.
+        """
+        try:
+            await self.connect()
+            await self.on_status({"voice_ready": True})
+            logger.info("[Voice] Eagerly connected — voice ready")
+        except Exception as e:
+            logger.warning(f"[Voice] Eager connect failed (will retry on first audio): {e}")
+        # Start the health monitor regardless — it will reconnect if needed
+        if not self._health_task or self._health_task.done():
+            self._health_task = asyncio.create_task(self._health_loop())
+
+    async def _health_loop(self):
+        """Background monitor: checks Live API health every 15s, auto-reconnects if down."""
+        while not self._closed:
+            await asyncio.sleep(15)
+            if self._closed:
+                break
+            # If no session and not currently connecting, proactively reconnect
+            if not self._session and not self._connecting:
+                logger.info("[Voice] Health check: session down — reconnecting...")
+                try:
+                    await self.connect()
+                    await self.on_status({"voice_ready": True, "reconnected": True})
+                    logger.info("[Voice] Health check: reconnected successfully")
+                except Exception as e:
+                    logger.warning(f"[Voice] Health check reconnect failed: {e}")
+                    await self.on_status({"voice_ready": False})
+
     # ═══════════════════════════════════════════════════════════
     #  STANDARD API — text & image (zero connection issues)
     # ═══════════════════════════════════════════════════════════
 
-    async def send_text(self, text: str):
+    async def send_text(self, text: str, request_id: str | None = None):
         """Text input → standard generate_content API. No WebSocket, no 1011."""
         logger.info(f"[WB] Text question: {text[:80]}...")
         # If this is a student answer to an AI question, reset the flag.
@@ -340,9 +373,9 @@ class GeminiSession:
         self._awaiting_student_answer = False
         if self._wb_task and not self._wb_task.done():
             self._wb_task.cancel()
-        self._wb_task = asyncio.create_task(self._generate_whiteboard(text))
+        self._wb_task = asyncio.create_task(self._generate_whiteboard(text, request_id=request_id))
 
-    async def send_image(self, base64_data: str, user_text: str = ""):
+    async def send_image(self, base64_data: str, user_text: str = "", request_id: str | None = None):
         """Image input → standard generate_content API."""
         if "," in base64_data:
             base64_data = base64_data.split(",", 1)[1]
@@ -359,9 +392,9 @@ class GeminiSession:
             "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard."
         )
         logger.info(f"[WB] Image uploaded — analyzing via standard API (prompt: {prompt[:60]})")
-        await self._generate_whiteboard(prompt, image_parts=image_parts)
+        await self._generate_whiteboard(prompt, image_parts=image_parts, request_id=request_id)
 
-    async def _generate_whiteboard(self, text: str, image_parts: list | None = None):
+    async def _generate_whiteboard(self, text: str, image_parts: list | None = None, request_id: str | None = None):
         """Generate whiteboard commands via standard generate_content API.
 
         Multi-turn tool calling: model returns function calls → we respond → repeat
@@ -388,7 +421,10 @@ class GeminiSession:
                 ),
             )
 
-            await self.on_status({"speaking": True})
+            status_start: dict = {"speaking": True}
+            if request_id:
+                status_start["request_id"] = request_id
+            await self.on_status(status_start)
             total_cmds = 0
             transcript_emitted = False
             all_text_parts: list[str] = []  # accumulate across ALL rounds
@@ -406,7 +442,10 @@ class GeminiSession:
 
                     if not response.candidates:
                         logger.warning("[WB] No candidates in response")
-                        await self.on_status({"error": "No response from AI — please try again."})
+                        status_err: dict = {"error": "No response from AI — please try again."}
+                        if request_id:
+                            status_err["request_id"] = request_id
+                        await self.on_status(status_err)
                         break
 
                     model_content = response.candidates[0].content
@@ -471,7 +510,10 @@ class GeminiSession:
 
             except Exception as e:
                 logger.error(f"[WB] Generation error: {e}", exc_info=True)
-                await self.on_status({"error": f"Whiteboard error: {str(e)}"})
+                status_err: dict = {"error": f"Whiteboard error: {str(e)}"}
+                if request_id:
+                    status_err["request_id"] = request_id
+                await self.on_status(status_err)
             finally:
                 # Detect if AI asked a question BEFORE signaling turn_complete
                 is_asking = False
@@ -484,6 +526,9 @@ class GeminiSession:
 
                 # Send everything in ONE status message so frontend processes atomically
                 status: dict = {"speaking": False, "turn_complete": True}
+                if request_id:
+                    status["request_id"] = request_id
+                # In teacher mode, bias toward continuity: if we asked a question, expect an answer.
                 if is_asking:
                     status["awaiting_answer"] = True
                 await self.on_status(status)
@@ -494,11 +539,24 @@ class GeminiSession:
 
     async def send_audio(self, audio_data: bytes):
         """Audio input → Live API (native audio model)."""
-        await self.ensure_connected()
-        if self._session:
-            await self._session.send_realtime_input(
-                audio={"data": audio_data, "mime_type": "audio/pcm"}
-            )
+        try:
+            await self.ensure_connected()
+            if self._session:
+                await self._session.send_realtime_input(
+                    audio={"data": audio_data, "mime_type": "audio/pcm"}
+                )
+        except Exception as e:
+            # Surface the *real* cause to the UI so it's debuggable
+            msg = str(e)
+            logger.error(f"[Voice] send_audio failed: {msg}", exc_info=True)
+            await self.on_status({
+                "error": f"Voice session lost — {msg[:180]}",
+                "speaking": False,
+            })
+            # Force reconnect on next audio chunk
+            self._session = None
+            self._ctx = None
+            self._connecting = False
 
     async def ensure_connected(self):
         """Lazily connect the Live API on first audio use."""
@@ -531,6 +589,9 @@ class GeminiSession:
             )
             self._session = await self._ctx.__aenter__()
             self._receive_task = asyncio.create_task(self._receive_loop())
+        except Exception as e:
+            logger.error(f"[Voice] Live connect failed: {e}", exc_info=True)
+            raise
         finally:
             self._connecting = False
 
@@ -547,18 +608,22 @@ class GeminiSession:
         self._ctx = None
         self._connecting = False
 
-        for attempt in range(3):
-            wait = 1.0 * (2 ** attempt)
-            logger.info(f"Live API reconnect {attempt + 1}/3 in {wait}s...")
+        last_err = None
+        for attempt in range(5):
+            wait = 1.0 * (2 ** min(attempt, 3))  # cap backoff at 8s
+            logger.info(f"Live API reconnect {attempt + 1}/5 in {wait}s...")
             await asyncio.sleep(wait)
             try:
                 await self.connect()
                 logger.info("Live API reconnected!")
-                await self.on_status({"connected": True, "reconnected": True})
+                await self.on_status({"connected": True, "reconnected": True, "voice_ready": True})
                 return True
             except Exception as e:
+                last_err = e
                 logger.info(f"Reconnect attempt {attempt + 1} failed: {e}")
         logger.error("All Live API reconnect attempts failed")
+        if last_err:
+            await self.on_status({"error": f"Voice session lost — {str(last_err)[:180]}", "speaking": False, "voice_ready": False})
         return False
 
     async def _receive_loop(self):
@@ -587,7 +652,7 @@ class GeminiSession:
             else:
                 logger.error(f"Live API unexpected error: {error_str}")
             # Only notify frontend if ALL reconnect attempts failed
-            await self.on_status({"error": f"Voice session lost — please try again", "speaking": False})
+            await self.on_status({"error": f"Voice session lost — {error_str[:180]}", "speaking": False})
 
     async def _handle_response(self, response):
         """Process a single Live API response."""
@@ -679,6 +744,11 @@ class GeminiSession:
 
     async def close(self):
         """Close all sessions."""
+        self._closed = True
+        # Stop health monitor
+        if self._health_task:
+            self._health_task.cancel()
+            self._health_task = None
         # Close Live API
         if self._receive_task:
             self._receive_task.cancel()

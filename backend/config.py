@@ -24,6 +24,8 @@ def _get_secret(secret_id: str, fallback_env: str) -> str:
         return env_val
 
 GOOGLE_API_KEY = _get_secret("google-api-key", "GOOGLE_API_KEY")
+# Optional overrides (useful for debugging model availability)
+AUDIO_MODEL = os.getenv("AUDIO_MODEL", "")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
 GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION", "sessions")

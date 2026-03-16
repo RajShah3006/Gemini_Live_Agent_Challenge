@@ -62,7 +62,7 @@ function NotebookPageInner({
   const [contextLost, setContextLost] = useState(false);
 
   /* ── Resize canvas to fit content ── */
-  const resizeCanvas = useCallback(() => {
+  function resizeCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
@@ -87,7 +87,7 @@ function NotebookPageInner({
     for (const cmd of completedRef.current) {
       drawInstant(ctx, cmd, dpr, cmd._step || 0);
     }
-  }, []);
+  }
 
   /* ── Process incoming commands ── */
   const drain = useCallback(async () => {
@@ -183,6 +183,7 @@ function NotebookPageInner({
   /* ── Watch for new commands ── */
   useEffect(() => {
     commandsRef.current = commands;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     drain();
   }, [commands, drain]);
 

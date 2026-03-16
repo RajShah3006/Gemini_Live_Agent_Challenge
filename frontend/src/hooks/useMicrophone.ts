@@ -8,7 +8,7 @@
  * for browsers that don't support AudioWorklet.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useMicrophone(onAudioChunk: (base64: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
@@ -17,7 +17,9 @@ export function useMicrophone(onAudioChunk: (base64: string) => void) {
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const onAudioChunkRef = useRef(onAudioChunk);
-  onAudioChunkRef.current = onAudioChunk;
+  useEffect(() => {
+    onAudioChunkRef.current = onAudioChunk;
+  }, [onAudioChunk]);
 
   const arrayBufferToBase64 = useCallback((buffer: ArrayBuffer): string => {
     const bytes = new Uint8Array(buffer);

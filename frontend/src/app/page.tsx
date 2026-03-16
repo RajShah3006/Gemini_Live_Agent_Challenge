@@ -207,10 +207,12 @@ export default function Home() {
     isListening,
     isSpeaking,
     isThinking,
+    voiceReady,
     connectionStatus,
     errorMessage,
     connect,
     disconnect,
+    sendImage,
     sendText,
     startTalking,
     stopTalking,
@@ -221,6 +223,8 @@ export default function Home() {
     setTranscript,
     autoMicEnabled,
     toggleAutoMic,
+    voiceCommand,
+    sessionId,
     sendMode,
     awaitingAnswer,
     ttsEnabled,
@@ -294,14 +298,18 @@ export default function Home() {
 
   // Wrap sendText to show feedback toast
   const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
-    sendText(text);
+    if (imageBase64) {
+      sendImage(imageBase64, text);
+    } else {
+      sendText(text);
+    }
     const label = imageBase64 ? "📷 Image sent" : text ? "✅ Sent" : "";
     if (label) {
       setSentToast(label);
       setTimeout(() => setSentToast(null), 1800);
     }
     if (isMobile) setShowSidebar(false);
-  }, [sendText, isMobile]);
+  }, [sendImage, sendText, isMobile]);
 
   const followUp = useCallback((label: string) => {
     setComposerText(`[${label}] `);
@@ -447,6 +455,19 @@ export default function Home() {
             />
             {isConnected ? "Live" : "Offline"}
           </span>
+          {sessionId && (
+            <span
+              className="hidden sm:inline-flex items-center rounded-full px-2 py-1 text-[11px] font-mono"
+              style={{
+                background: "rgba(148,163,184,0.08)",
+                border: "1px solid rgba(148,163,184,0.12)",
+                color: "var(--text-muted)",
+              }}
+              title="Backend session id (for debugging/history correlation)"
+            >
+              #{sessionId}
+            </span>
+          )}
         </div>
       </header>
 
@@ -529,6 +550,7 @@ export default function Home() {
             scrollToLabel={scrollTarget}
             isThinking={isThinking}
             awaitingAnswer={awaitingAnswer}
+            voiceCommand={voiceCommand}
           />
         </div>
       </div>
@@ -547,6 +569,7 @@ export default function Home() {
           isListening={isListening}
           isSpeaking={isSpeaking}
           isThinking={isThinking}
+          voiceReady={voiceReady}
           autoMicEnabled={autoMicEnabled}
           onConnect={connect}
           onDisconnect={disconnect}

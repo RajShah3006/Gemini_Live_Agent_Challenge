@@ -119,7 +119,7 @@ WS_IDLE_TIMEOUT = 300  # 5 minutes
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "server_version": "voice-debug-2026-03-16a"}
 
 
 # ── REST API: Session History (Firestore) ──
@@ -235,10 +235,6 @@ async def websocket_session(ws: WebSocket):
     )
 
     try:
-        # Don't connect to Gemini here — it connects lazily on first user input.
-        # This avoids the native audio model dropping idle connections (1011 error).
-        await _send({"type": "status", "payload": {"connected": True, "session_id": session_id}})
-
         limiter = RateLimiter(max_per_minute=30)
         client_ip = ws.client.host if ws.client else "unknown"
         pending_tasks: set[asyncio.Task] = set()
@@ -255,10 +251,14 @@ async def websocket_session(ws: WebSocket):
                     logger.error(f"Background task crashed: {exc}", exc_info=exc)
             task.add_done_callback(_done)
 
+        # Eagerly start voice session so it's ready when the user wants to talk
+        _track_task(asyncio.create_task(session.start_voice()))
+        await _send({"type": "status", "payload": {"connected": True, "session_id": session_id}})
+
         # ── Task helpers (defined once, not per-iteration) ──
-        async def _handle_text(t_str: str):
+        async def _handle_text(t_str: str, request_id: str | None = None):
             try:
-                await session.send_text(t_str)
+                await session.send_text(t_str, request_id=request_id)
                 if session_id:
                     try:
                         await session_svc.save_message(session_id, "user", t_str)
@@ -268,9 +268,9 @@ async def websocket_session(ws: WebSocket):
                 logger.error(f"Task _handle_text crashed: {e}", exc_info=True)
                 await _send({"type": "status", "payload": {"error": "Failed to process your question — please try again."}})
 
-        async def _handle_image(d_b64: str, t_str: str):
+        async def _handle_image(d_b64: str, t_str: str, request_id: str | None = None):
             try:
-                await session.send_image(d_b64, t_str)
+                await session.send_image(d_b64, t_str, request_id=request_id)
                 if session_id:
                     try:
                         await session_svc.save_message(
@@ -325,15 +325,17 @@ async def websocket_session(ws: WebSocket):
 
             elif msg_type == "text":
                 text = (payload.get("text", "") or "")[:2000]  # cap at 2000 chars
+                request_id = payload.get("request_id")
                 if text:
                     if not limiter.check() or not _global_limiter.check(client_ip):
                         await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
                         continue
-                    _track_task(asyncio.create_task(_handle_text(text)))
+                    _track_task(asyncio.create_task(_handle_text(text, str(request_id) if request_id else None)))
 
             elif msg_type == "image":
                 image_data = payload.get("data", "")
                 image_text = (payload.get("text", "") or "")[:2000]
+                request_id = payload.get("request_id")
                 if len(image_data) > 10_000_000:  # ~7.5 MB decoded
                     logger.warning("Image payload too large — skipping")
                     await _send({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
@@ -342,7 +344,7 @@ async def websocket_session(ws: WebSocket):
                     if not limiter.check() or not _global_limiter.check(client_ip):
                         await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
                         continue
-                    _track_task(asyncio.create_task(_handle_image(image_data, image_text)))
+                    _track_task(asyncio.create_task(_handle_image(image_data, image_text, str(request_id) if request_id else None)))
 
             elif msg_type == "interrupt":
                 _track_task(asyncio.create_task(_handle_interrupt()))

@@ -18,7 +18,11 @@ export function TeacherMascot({ state }: TeacherMascotProps) {
   const [reacting, setReacting] = useState(false);
 
   useEffect(() => {
-    if (state !== "talking") { setMouthOpen(false); return; }
+    if (state !== "talking") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMouthOpen(false);
+      return;
+    }
     const id = setInterval(() => setMouthOpen(v => !v), 180);
     return () => clearInterval(id);
   }, [state]);
@@ -26,6 +30,7 @@ export function TeacherMascot({ state }: TeacherMascotProps) {
   // Trigger a brief reaction when entering "writing" state
   useEffect(() => {
     if (state === "writing") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReacting(true);
       const t = setTimeout(() => setReacting(false), 600);
       return () => clearTimeout(t);

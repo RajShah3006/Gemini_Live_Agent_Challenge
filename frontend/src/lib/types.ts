@@ -1,12 +1,27 @@
 /** Message types exchanged over WebSocket */
 
 export interface ClientMessage {
-  type: "audio" | "image" | "text" | "control";
+  type:
+    | "audio"
+    | "image"
+    | "text"
+    | "control"
+    | "interrupt"
+    | "ping"
+    | "set_mode"
+    | "tts_toggle";
   payload: Record<string, unknown>;
 }
 
 export interface ServerMessage {
-  type: "audio" | "tts_audio" | "whiteboard" | "transcript" | "status" | "error";
+  type:
+    | "audio"
+    | "tts_audio"
+    | "whiteboard"
+    | "transcript"
+    | "status"
+    | "error"
+    | "pong";
   payload: Record<string, unknown>;
 }
 

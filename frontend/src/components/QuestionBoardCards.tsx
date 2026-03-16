@@ -19,6 +19,7 @@ interface QuestionBoardCardsProps {
   scrollToLabel?: string | null;
   isThinking?: boolean;
   awaitingAnswer?: boolean;
+  voiceCommand?: { cmd: string; arg?: string } | null;
 }
 
 export function QuestionBoardCards({
@@ -29,6 +30,7 @@ export function QuestionBoardCards({
   scrollToLabel,
   isThinking,
   awaitingAnswer,
+  voiceCommand,
 }: QuestionBoardCardsProps) {
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -151,7 +153,7 @@ export function QuestionBoardCards({
                   isThinking={isLatest ? !!isThinking : false}
                   onQuestionsChange={undefined}
                   toolbarPortalRef={undefined}
-                  voiceCommand={undefined}
+                  voiceCommand={isLatest ? (voiceCommand ?? null) : null}
                   scrollToLabel={undefined}
                 />
               </div>

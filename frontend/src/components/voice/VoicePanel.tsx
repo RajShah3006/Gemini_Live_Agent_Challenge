@@ -7,6 +7,7 @@ import { AudioVisualizer } from "./AudioVisualizer";
 import type { QuestionInfo } from "@/lib/types";
 import { extractImageFileFromClipboard, readImageFileAsDataUrl } from "@/lib/imageUpload";
 
+/* eslint-disable @typescript-eslint/no-namespace */
 declare global {
   namespace JSX {
     interface IntrinsicElements {
@@ -23,6 +24,7 @@ interface VoicePanelProps {
   isListening: boolean;
   isSpeaking: boolean;
   isThinking?: boolean;
+  voiceReady?: boolean;
   autoMicEnabled: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -46,6 +48,7 @@ export function VoicePanel({
   isListening,
   isSpeaking,
   isThinking = false,
+  voiceReady = false,
   autoMicEnabled,
   onConnect,
   onDisconnect,
@@ -101,7 +104,7 @@ export function VoicePanel({
   }, []);
 
   const handleSendText = () => {
-    let trimmed = textInput.trim();
+    const trimmed = textInput.trim();
     if (!trimmed && !pendingImage) return;
 
     onSendText(trimmed, pendingImage ?? undefined);
@@ -321,10 +324,13 @@ export function VoicePanel({
             style={{ color: "var(--text-primary)" }}
           />
         ) : (
-          // @ts-expect-error
+          // @ts-expect-error MathLive web component types are not in React yet
           <math-field
-            onInput={(e: any) => onTextInputChange(e.target.value)}
-            onKeyDown={(e: any) => {
+            onInput={(e: Event) => {
+              const target = e.target as unknown as { value?: string };
+              onTextInputChange(target.value ?? "");
+            }}
+            onKeyDown={(e: KeyboardEvent) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSendText();
@@ -355,6 +361,16 @@ export function VoicePanel({
         <div className="flex items-center gap-2">
           {/* Status icon/text built into mic area roughly */}
           <div className="flex items-center gap-1.5">
+            {/* Voice status dot */}
+            <span
+              title={voiceReady ? "Voice ready" : "Voice connecting…"}
+              className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+              style={{
+                background: voiceReady ? "#34d399" : "#fbbf24",
+                boxShadow: voiceReady ? "0 0 6px rgba(52,211,153,0.5)" : "0 0 6px rgba(251,191,36,0.5)",
+                animation: voiceReady ? "none" : "pulse 1.5s ease-in-out infinite",
+              }}
+            />
             <div className="relative">
               {isListening && <div className="absolute inset-0 rounded-lg" style={{ animation: "talkRing 1s ease-out infinite", border: "2px solid rgba(248,113,113,0.3)" }} />}
               {autoMicEnabled ? (
