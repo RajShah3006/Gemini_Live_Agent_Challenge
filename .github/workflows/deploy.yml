@@ -55,7 +55,7 @@ jobs:
             --platform managed \
             --region "$REGION" \
             --allow-unauthenticated \
-            --set-env-vars "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=${PROJECT_ID}-mathboard" \
+            --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=${PROJECT_ID}-mathboard" \
             --project "$PROJECT_ID" \
             --quiet
 
