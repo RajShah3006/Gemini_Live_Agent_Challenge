@@ -106,8 +106,15 @@ export function latexToHuman(s: string): string {
   r = r.replace(/\\phi/g, "φ"); r = r.replace(/\\omega/g, "ω");
   r = r.replace(/\\Delta/g, "Δ"); r = r.replace(/\\Sigma/g, "Σ");
   r = r.replace(/\\sin/g, "sin"); r = r.replace(/\\cos/g, "cos");
-  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\log/g, "log");
+  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\sec/g, "sec");
+  r = r.replace(/\\csc/g, "csc"); r = r.replace(/\\cot/g, "cot");
+  r = r.replace(/\\arcsin/g, "arcsin"); r = r.replace(/\\arccos/g, "arccos");
+  r = r.replace(/\\arctan/g, "arctan");
+  r = r.replace(/\\log/g, "log");
   r = r.replace(/\\ln/g, "ln"); r = r.replace(/\\exp/g, "exp");
+  r = r.replace(/\\max/g, "max"); r = r.replace(/\\min/g, "min");
+  r = r.replace(/\\det/g, "det"); r = r.replace(/\\gcd/g, "gcd");
+  r = r.replace(/\\bmod/g, "mod"); r = r.replace(/\\mod/g, "mod");
   r = r.replace(/\^\{0}/g, "⁰"); r = r.replace(/\^\{1}/g, "¹");
   r = r.replace(/\^\{2}/g, "²"); r = r.replace(/\^\{3}/g, "³");
   r = r.replace(/\^\{4}/g, "⁴"); r = r.replace(/\^\{5}/g, "⁵");
@@ -487,22 +494,8 @@ export function animateCmd(
       }
 
       case "draw_circle": {
-        const cx = p.x as number, cy = p.y as number;
-        const r = (p.radius as number) || 30;
-        const color = (p.color as string) || "#fbbf24";
-        const w = (p.width as number) || 2.5;
-        const perim = 2 * Math.PI * r;
-        const t0 = performance.now();
-        const anim = () => {
-          const prog = Math.min((performance.now() - t0) / SHAPE_DURATION, 1);
-          const endAngle = -Math.PI / 2 + prog * 2 * Math.PI;
-          ctx.lineCap = "round";
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, -Math.PI / 2, endAngle);
-          markerStroke(ctx, color, w);
-          prog < 1 ? requestAnimationFrame(anim) : resolve();
-        };
-        requestAnimationFrame(anim);
+        // draw_circle removed — no-op, resolve immediately
+        resolve();
         break;
       }
 
@@ -690,15 +683,9 @@ export function drawInstant(
       markerStroke(ctx, LINE_COLOR, w);
       break;
     }
-    case "draw_circle": {
-      const cx = p.x as number, cy = p.y as number;
-      const r = (p.radius as number) || 30;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-      ctx.closePath();
-      markerStroke(ctx, "#fbbf24", (p.width as number) || 2.5);
+    case "draw_circle":
+      // draw_circle removed — no-op
       break;
-    }
     case "draw_rect":
       ctx.beginPath();
       ctx.rect(p.x as number, p.y as number, p.w as number, p.h as number);

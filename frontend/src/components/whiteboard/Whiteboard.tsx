@@ -135,8 +135,15 @@ function latexToHuman(s: string): string {
   r = r.replace(/\\Delta/g, "Δ"); r = r.replace(/\\Sigma/g, "Σ");
   // Trig / log
   r = r.replace(/\\sin/g, "sin"); r = r.replace(/\\cos/g, "cos");
-  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\log/g, "log");
+  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\sec/g, "sec");
+  r = r.replace(/\\csc/g, "csc"); r = r.replace(/\\cot/g, "cot");
+  r = r.replace(/\\arcsin/g, "arcsin"); r = r.replace(/\\arccos/g, "arccos");
+  r = r.replace(/\\arctan/g, "arctan");
+  r = r.replace(/\\log/g, "log");
   r = r.replace(/\\ln/g, "ln"); r = r.replace(/\\exp/g, "exp");
+  r = r.replace(/\\max/g, "max"); r = r.replace(/\\min/g, "min");
+  r = r.replace(/\\det/g, "det"); r = r.replace(/\\gcd/g, "gcd");
+  r = r.replace(/\\bmod/g, "mod"); r = r.replace(/\\mod/g, "mod");
   // Superscript: x^{2} → x² (common ones), else x^(n)
   r = r.replace(/\^\{0}/g, "⁰"); r = r.replace(/\^\{1}/g, "¹");
   r = r.replace(/\^\{2}/g, "²"); r = r.replace(/\^\{3}/g, "³");
@@ -313,7 +320,7 @@ export function Whiteboard({ commands, isSpeaking = false, isThinking = false, o
         return sx + ctx.measureText(`Step ${p.step}`).width + 40;
       }
       case "draw_circle":
-        return (p.x as number) + ((p.radius as number) || 30);
+        return 0; // draw_circle removed
       default:
         return 0;
     }
@@ -1018,10 +1025,7 @@ function offsetCommand(cmd: WhiteboardCommand, yOff: number, xOff: number): Whit
 
 function getCommandY(cmd: WhiteboardCommand): number {
   const p = cmd.params;
-  if (cmd.action === "draw_circle") {
-    const r = (p.radius as number) || 30;
-    return (p.y as number) + r;
-  }
+  if (cmd.action === "draw_circle") return 0; // draw_circle removed
   if (p.y !== undefined) {
     if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
     return p.y as number;

@@ -94,15 +94,6 @@ WHITEBOARD_DECLS = [
         }, ["x1", "y1", "x2", "y2"]),
     ),
     types.FunctionDeclaration(
-        name="draw_circle",
-        description="Draw a circle to highlight or circle an important answer, final result, or key term",
-        parameters=_schema({
-            "x": {"type": "NUMBER", "description": "Center X"},
-            "y": {"type": "NUMBER", "description": "Center Y"},
-            "radius": {"type": "NUMBER", "description": "Radius in px (default 30)"},
-        }, ["x", "y"]),
-    ),
-    types.FunctionDeclaration(
         name="draw_graph",
         description="Plot a math function graph with labeled axes. Use for graphing equations like y=x², y=sin(x), etc.",
         parameters=_schema({
@@ -131,7 +122,7 @@ RULES:
 3. step_marker() for each step heading. Always start with Step 1 for each new question. Do NOT repeat "Step N" in any draw_text — the marker already renders it.
 4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
 5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step" — use step_marker for that. Example: draw_text("Use substitution") not draw_text("Step 1: Use substitution").
-8. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+8. FINAL ANSWER: Write the final answer as a standalone draw_latex() call with a box: use \\boxed{} around the result. If the integral has + C, include it inside the boxed expression.
 9. Use symbolic notation on the board, not prose: write "x → ∞" not "as x approaches infinity". Keep board content mathematical.
 10. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
 
@@ -150,7 +141,7 @@ RULES:
 4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
 5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step" — use step_marker for that. Example: draw_text("Use substitution") not draw_text("Step 1: Use substitution").
 6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200 — no side annotations.
-7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call with a box: use \\boxed{} around the result. If the integral has + C, include it inside the boxed expression.
 8. Return ALL tool calls needed for the complete solution.
 9. At the end, use draw_text() to add a brief reference like "Chain Rule" or "Integration by Parts" — name the theorem/technique used.
 10. Use symbolic notation on the board, not prose: write "x \\to \\infty" not "as x approaches infinity". Keep board content mathematical.
@@ -171,7 +162,7 @@ RULES:
 4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *).
 5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step".
 6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200.
-7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer.
+7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call with \\boxed{} around the result.
 8. Return ALL tool calls needed. Keep it brief — 2-3 steps max for most problems.
 9. Use symbolic notation on the board, not prose.
 10. For simple arithmetic, give the answer directly in 1 step.
@@ -189,7 +180,7 @@ RULES:
 4. Use step_marker() only for 1-2 key steps max. Skip unnecessary detail.
 5. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions. Use \\cdot or \\times for multiplication.
 6. draw_text() for short annotations only (under 25 chars).
-7. FINAL ANSWER: Write as standalone draw_latex() then draw_circle() on it.
+7. FINAL ANSWER: Write as standalone draw_latex() with \\boxed{} around the result.
 8. Keep your spoken explanation brief — under 15 seconds.
 9. Use symbolic notation, not prose.
 10. For simple arithmetic, give the answer directly.

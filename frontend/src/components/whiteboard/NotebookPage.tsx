@@ -119,7 +119,7 @@ function NotebookPageInner({
 
       // ── Layout enforcement: prevent overlap ──
       // Ensure each command's Y is below the previous command's bottom edge
-      if (cmd.params.y !== undefined && cmd.action !== "draw_circle" && cmd.action !== "highlight") {
+      if (cmd.params.y !== undefined && cmd.action !== "highlight") {
         const cmdY = cmd.params.y as number;
         const minSafeY = maxYRef.current + MIN_Y_GAP;
         if (cmdY < minSafeY) {
@@ -142,44 +142,8 @@ function NotebookPageInner({
         if (!cmd.params.text) continue;
       }
 
-      // Auto-fit circle → pill around nearby text
-      if (cmd.action === "draw_circle") {
-        const rawCx = cmd.params.x as number;
-        const rawCy = cmd.params.y as number;
-        let pillW = 60, pillH = 30;
-        let bestDist = Infinity;
-        let bestIsLatex = false;
-        for (let ci = completedRef.current.length - 1; ci >= 0; ci--) {
-          const prev = completedRef.current[ci];
-          if (prev.action !== "draw_text" && prev.action !== "draw_latex") continue;
-          const isLatex = prev.action === "draw_latex";
-          const tY = prev.params.y as number;
-          const tX = prev.params.x as number;
-          const yDist = Math.abs(rawCy - tY);
-          if (yDist > 80) continue;
-          const raw = isLatex ? prev.params.latex : prev.params.text;
-          const text = latexToHuman(raw as string);
-          ctx.font = `${CONTENT_SIZE}px ${FONT}`;
-          const tw = ctx.measureText(text).width;
-          const textCx = tX + tw / 2;
-          const textCy = tY - CONTENT_SIZE * 0.3;
-          const dist = Math.hypot(rawCx - textCx, rawCy - textCy);
-          if (bestIsLatex && !isLatex) continue;
-          if (isLatex && !bestIsLatex && dist < 300) {
-            bestDist = dist; bestIsLatex = true;
-          } else if (dist >= bestDist) {
-            continue;
-          } else {
-            bestDist = dist; bestIsLatex = isLatex;
-          }
-          pillW = tw + 28;
-          pillH = CONTENT_SIZE + 16;
-          cmd.params.x = textCx;
-          cmd.params.y = textCy;
-        }
-        cmd.params._pillW = pillW;
-        cmd.params._pillH = pillH;
-      }
+      // draw_circle removed — skip any draw_circle commands
+      if (cmd.action === "draw_circle") continue;
 
       // Grow canvas if needed — use accurate content height
       const cmdY = getCommandY(cmd);
@@ -322,10 +286,7 @@ export const NotebookPage = memo(NotebookPageInner, (prev, next) =>
 /* ── Helper: get Y coordinate from command ── */
 function getCommandY(cmd: WhiteboardCommand): number {
   const p = cmd.params;
-  if (cmd.action === "draw_circle") {
-    const ph = (p._pillH as number) || ((p.radius as number) || 30) * 2;
-    return (p.y as number) + ph / 2;
-  }
+  if (cmd.action === "draw_circle") return 0; // draw_circle removed
   if (p.y !== undefined) {
     if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
     return p.y as number;
@@ -350,7 +311,7 @@ function getCommandBottom(cmd: WhiteboardCommand): number {
     case "draw_arrow":
       return Math.max((p.y1 as number) || 0, (p.y2 as number) || 0) + 15;
     case "draw_circle":
-      return y + ((p._pillH as number) || ((p.radius as number) || 30) * 2) + 15;
+      return y; // draw_circle removed
     case "highlight":
       return y + ((p.height as number) || 40) + 15;
     default:
