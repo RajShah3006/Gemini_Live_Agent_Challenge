@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { TranscriptEntry } from "@/lib/types";
-import type { QuestionInfo } from "@/components/whiteboard/Whiteboard";
+import type { QuestionInfo } from "@/lib/types";
 
 /* ── Types ── */
 

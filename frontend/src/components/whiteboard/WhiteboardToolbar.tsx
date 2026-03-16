@@ -143,7 +143,7 @@ export function WhiteboardToolbar({ canvasRef, containerRef, onUndo, onClear, ca
       <ToolBtn title="Zoom out" onClick={() => handleZoom(-1)}>
         <SketchIcon d="M11 3a8 8 0 100 16 8 8 0 000-16zM21 21l-4-4M8 11h6" />
       </ToolBtn>
-      <span className="text-[10px] min-w-[32px] text-center font-mono" style={{ color: "var(--text-muted)" }}>{Math.round(zoom * 100)}%</span>
+      <span className="text-[10px] min-w-[32px] text-center font-mono" style={{ color: "var(--text-muted)" }}>{Math.round(zoom / 2 * 100)}%</span>
       <ToolBtn title="Zoom in" onClick={() => handleZoom(1)}>
         <SketchIcon d="M11 3a8 8 0 100 16 8 8 0 000-16zM21 21l-4-4M8 11h6M11 8v6" />
       </ToolBtn>

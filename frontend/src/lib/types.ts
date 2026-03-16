@@ -31,6 +31,14 @@ export interface WhiteboardCommand {
   _sectionIdx?: number;
 }
 
+export interface QuestionInfo {
+  label: string; // "Q1", "Q2"
+  text: string; // question text
+  stepCount?: number; // number of steps in the response
+  idx: number; // index for UI keys
+  yStart: number; // reserved for scroll targets
+}
+
 export interface TranscriptEntry {
   role: "user" | "tutor";
   text: string;

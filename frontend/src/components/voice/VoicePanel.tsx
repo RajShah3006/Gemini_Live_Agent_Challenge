@@ -4,7 +4,7 @@ import { useCallback, useRef, useState, useEffect } from "react";
 import type { RefObject } from "react";
 import { AudioVisualizer } from "./AudioVisualizer";
 
-import type { QuestionInfo } from "@/components/whiteboard/Whiteboard";
+import type { QuestionInfo } from "@/lib/types";
 import { extractImageFileFromClipboard, readImageFileAsDataUrl } from "@/lib/imageUpload";
 
 declare global {
@@ -278,6 +278,13 @@ export function VoicePanel({
       )}
 
       {/* ── Middle Tier: Dominant Input Field ── */}
+      {awaitingAnswer && (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium animate-pulse"
+          style={{ background: "rgba(251,191,36,0.15)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)" }}>
+          <span className="h-2 w-2 rounded-full" style={{ background: "#fbbf24" }} />
+          Your turn — answer the question above 🤔
+        </div>
+      )}
       <div 
         className={`relative flex items-end rounded-2xl w-full transition-shadow focus-within:ring-2 focus-within:ring-indigo-500/50 shadow-sm hover:shadow-md${awaitingAnswer ? " ring-2 ring-amber-400/60 animate-pulse" : ""}`}
         style={{

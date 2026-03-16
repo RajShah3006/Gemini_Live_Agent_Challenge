@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Whiteboard, type QuestionInfo } from "@/components/whiteboard/Whiteboard";
+import { QuestionBoardCards } from "@/components/QuestionBoardCards";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { SessionHistory } from "@/components/SessionHistory";
 import { FormulaSheet } from "@/components/FormulaSheet";
@@ -26,7 +26,44 @@ interface NotebookPage {
   title: string;
   transcript: TranscriptEntry[];
   whiteboardCommands: WhiteboardCommand[];
-  questions: QuestionInfo[];
+}
+
+function groupWhiteboardCommands(commands: WhiteboardCommand[]) {
+  const cards: Array<{ label: string; text: string; commands: WhiteboardCommand[]; stepCount: number }> = [];
+  let current: { label: string; text: string; commands: WhiteboardCommand[] } | null = null;
+  let qCount = 0;
+
+  for (const cmd of commands) {
+    if (cmd.action === "question_header") {
+      qCount += 1;
+      const text = String((cmd.params as { text?: string }).text || `Question ${qCount}`);
+      current = { label: `Q${qCount}`, text, commands: [] };
+      cards.push({ ...current, commands: [cmd], stepCount: 0 });
+      continue;
+    }
+    if (cmd.action === "student_answer") {
+      if (!current) {
+        qCount += 1;
+        current = { label: `Q${qCount}`, text: `Question ${qCount}`, commands: [] };
+        cards.push({ ...current, stepCount: 0 });
+      }
+      const idx = cards.length - 1;
+      cards[idx].commands.push(cmd);
+      continue;
+    }
+    if (!current) {
+      qCount += 1;
+      current = { label: `Q${qCount}`, text: `Question ${qCount}`, commands: [] };
+      cards.push({ ...current, stepCount: 0 });
+    }
+    const idx = cards.length - 1;
+    cards[idx].commands.push(cmd);
+    if (cmd.action === "step_marker") {
+      cards[idx].stepCount += 1;
+    }
+  }
+
+  return cards;
 }
 
 function ChatMessageItem({ msg, onFollowUp }: { msg: { text: string; role: "user" | "tutor" | "system" }, onFollowUp?: (topic: string) => void }) {
@@ -182,7 +219,6 @@ export default function Home() {
     setWhiteboardCommands,
     transcript,
     setTranscript,
-    voiceCommand,
     autoMicEnabled,
     toggleAutoMic,
     sendMode,
@@ -190,7 +226,6 @@ export default function Home() {
   } = useSession();
 
   const [showHistory, setShowHistory] = useState(false);
-  const [questions, setQuestions] = useState<QuestionInfo[]>([]);
   const [expandedQ, setExpandedQ] = useState<number | null>(null);
   const [composerText, setComposerText] = useState("");
   const [scrollTarget, setScrollTarget] = useState<string | null>(null);
@@ -198,11 +233,10 @@ export default function Home() {
   const [sentToast, setSentToast] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
-  const toolbarPortalRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
 
   const [pages, setPages] = useState<NotebookPage[]>([
-    { id: "page-1", title: "Page 1", transcript: [], whiteboardCommands: [], questions: [] }
+    { id: "page-1", title: "Page 1", transcript: [], whiteboardCommands: [] }
   ]);
   const [activePageId, setActivePageId] = useState("page-1");
 
@@ -210,13 +244,12 @@ export default function Home() {
     // Save current page state, then load the target page — all via functional setState
     setPages(prev => {
       const updated = prev.map(p =>
-        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands } : p
       );
       const newPage = updated.find(p => p.id === newId);
       if (newPage) {
         if (typeof setTranscript === "function") setTranscript(newPage.transcript);
         if (typeof setWhiteboardCommands === "function") setWhiteboardCommands(newPage.whiteboardCommands);
-        setQuestions(newPage.questions);
         setActivePageId(newId);
 
         disconnect();
@@ -226,19 +259,18 @@ export default function Home() {
       }
       return updated;
     });
-  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
+  }, [activePageId, transcript, whiteboardCommands, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
   const addPage = useCallback(() => {
     setPages(prev => {
       // Save current page state
       const updated = prev.map(p =>
-        p.id === activePageId ? { ...p, transcript, whiteboardCommands, questions } : p
+        p.id === activePageId ? { ...p, transcript, whiteboardCommands } : p
       );
       const newId = `page-${Date.now()}`;
-      const newPage: NotebookPage = { id: newId, title: `Page ${updated.length + 1}`, transcript: [], whiteboardCommands: [], questions: [] };
+      const newPage: NotebookPage = { id: newId, title: `Page ${updated.length + 1}`, transcript: [], whiteboardCommands: [] };
       if (typeof setTranscript === "function") setTranscript([]);
       if (typeof setWhiteboardCommands === "function") setWhiteboardCommands([]);
-      setQuestions([]);
       setActivePageId(newId);
 
       disconnect();
@@ -247,11 +279,16 @@ export default function Home() {
       }
       return [...updated, newPage];
     });
-  }, [activePageId, transcript, whiteboardCommands, questions, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
+  }, [activePageId, transcript, whiteboardCommands, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
-  const handleQuestionsChange = useCallback((qs: QuestionInfo[]) => {
-    setQuestions(qs);
-  }, []);
+  const cards = groupWhiteboardCommands(whiteboardCommands);
+  const questions = cards.map((c, idx) => ({
+    label: c.label,
+    text: c.text,
+    stepCount: c.stepCount,
+    idx,
+    yStart: idx,
+  }));
 
   // Wrap sendText to show feedback toast
   const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
@@ -315,9 +352,8 @@ export default function Home() {
     <main className="flex h-screen flex-col" style={{ background: "var(--bg-base)" }}>
       {/* ── Error Toast ── */}
       {errorMessage && (
-        <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-5 py-3 text-sm font-medium shadow-lg cursor-pointer"
-          style={{ background: "var(--danger)", color: "#fff", maxWidth: "90vw" }}
-          onClick={() => {/* error is auto-dismissed, but click provides feedback */}}
+        <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-lg px-4 py-2 text-sm font-medium shadow-lg"
+          style={{ background: "rgba(248,113,113,0.15)", color: "#f87171", border: "1px solid rgba(248,113,113,0.3)", backdropFilter: "blur(12px)", maxWidth: "90vw" }}
           role="alert"
         >
           {errorMessage}
@@ -388,11 +424,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Toolbar portal — whiteboard tools render here */}
-        <div ref={toolbarPortalRef} id="toolbar-portal" className="flex items-center gap-2 flex-1 justify-center" />
+        <div className="flex-1" />
 
         <div className="flex items-center gap-2">
-
           <span
             className="group inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium relative cursor-default"
             style={{
@@ -440,8 +474,8 @@ export default function Home() {
 
       {/* ── Main Area ── */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Secondary Floating Tools Menu (Right Edge) */}
-        <div className="absolute right-2 md:right-4 top-2 md:top-4 z-30 flex flex-col gap-2">
+        {/* Secondary Floating Tools Menu (Right Edge) — hidden on mobile */}
+        <div className="absolute right-2 md:right-4 top-2 md:top-4 z-30 hidden md:flex flex-col gap-2">
           <div className="flex flex-col items-center gap-2 rounded-xl p-2 shadow-sm"
                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)" }}>
             <HandwritingCanvas onSubmit={handleHandwritingSubmit} />
@@ -483,16 +517,15 @@ export default function Home() {
           />
         </div>
 
-        {/* Whiteboard Area (Center/Right) */}
+        {/* Question Cards Area (Center/Right) */}
         <div className="flex flex-1 flex-col relative z-10" style={{ background: "var(--bg-base)" }}>
-          <Whiteboard
-            commands={whiteboardCommands}
-            isSpeaking={isSpeaking}
-            isThinking={isThinking}
-            onQuestionsChange={handleQuestionsChange}
-            toolbarPortalRef={toolbarPortalRef}
-            voiceCommand={voiceCommand}
+          <QuestionBoardCards
+            cards={cards}
+            expandedQ={expandedQ}
+            setExpandedQ={setExpandedQ}
+            onFollowUp={followUp}
             scrollToLabel={scrollTarget}
+            isThinking={isThinking}
           />
         </div>
       </div>

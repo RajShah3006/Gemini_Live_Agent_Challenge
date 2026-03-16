@@ -335,11 +335,22 @@ export function useSession() {
 
   const sendImage = useCallback(
     (base64: string) => {
+      const isAnswer = awaitingAnswerRef.current;
+      awaitingAnswerRef.current = false;
+      setAwaitingAnswer(false);
+      setWhiteboardCommands((prev) => [
+        ...prev,
+        {
+          id: `${isAnswer ? "sa" : "qh"}-${Date.now()}`,
+          action: isAnswer ? "student_answer" : "question_header",
+          params: { text: "Image question" },
+        },
+      ]);
       send("image", { data: base64 });
       addTranscript("user", "📷 Uploaded an image");
       setIsThinking(true);
     },
-    [send, addTranscript],
+    [send, addTranscript, setWhiteboardCommands],
   );
 
   const interrupt = useCallback(() => {
