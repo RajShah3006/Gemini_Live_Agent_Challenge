@@ -1,12 +1,12 @@
 /** Message types exchanged over WebSocket */
 
 export interface ClientMessage {
-  type: "audio" | "image" | "text" | "control" | "ping";
+  type: "audio" | "image" | "text" | "control";
   payload: Record<string, unknown>;
 }
 
 export interface ServerMessage {
-  type: "audio" | "whiteboard" | "transcript" | "status" | "error" | "pong";
+  type: "audio" | "whiteboard" | "transcript" | "status" | "error";
   payload: Record<string, unknown>;
 }
 
@@ -24,7 +24,8 @@ export interface WhiteboardCommand {
     | "draw_graph"
     | "highlight"
     | "step_marker"
-    | "question_header";
+    | "question_header"
+    | "student_answer";
   params: Record<string, unknown>;
   _step?: number;
   _sectionIdx?: number;

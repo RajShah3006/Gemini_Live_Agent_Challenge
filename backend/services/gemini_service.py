@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import uuid
 from typing import Callable, Awaitable
 
@@ -122,127 +123,44 @@ WHITEBOARD_DECLS = [
 WHITEBOARD_TOOLS = [types.Tool(function_declarations=WHITEBOARD_DECLS)]
 
 # System prompt for Live API (voice — paces tool calls with speech)
-AUDIO_SYSTEM_INSTRUCTION = """You are MathBoard, an AI math tutor. You have a whiteboard that updates in real time as you teach.
+AUDIO_SYSTEM_INSTRUCTION = """You are MathBoard, a math tutor. You have a whiteboard.
 
-You operate in THREE teaching modes. Detect the student's intent and choose the right mode automatically.
+RULES:
+1. Call tools IMMEDIATELY — start drawing right away.
+2. NEVER call clear_whiteboard(). The board preserves all work.
+3. step_marker() for each step heading. Always start with Step 1 for each new question. Do NOT repeat "Step N" in any draw_text — the marker already renders it.
+4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
+5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step" — use step_marker for that. Example: draw_text("Use substitution") not draw_text("Step 1: Use substitution").
+8. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+9. Use symbolic notation on the board, not prose: write "x → ∞" not "as x approaches infinity". Keep board content mathematical.
+10. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
 
-━━━ MODE 1: LECTURE MODE ━━━
-Triggered when student says: "teach me about", "explain", "what is", "how does", "introduce", "I want to learn about"
-
-Whiteboard flow — in this exact order:
-  1. draw_text("📚 [Topic Title]", x=40, y=60, size=32)
-  2. draw_latex(the key formula/definition, x=40, y=120, size=30)
-  3. draw_text("[One-line key idea]", x=40, y=175, size=20)
-  4. Verbally ask the student to guess the next part or confirm understanding before proceeding. Use `highlight` or `draw_arrow` to point out specific parts of the formula you are discussing.
-  5. Only after they respond, continue with step_marker(1) and a worked example. Don't dump the whole lecture at once!
-
-━━━ MODE 2: PROBLEM SOLVE MODE (SOCRATIC TUTORING) ━━━
-Triggered when student submits a specific problem, equation, or expression to solve.
-DO NOT SOLVE THE ENTIRE PROBLEM AT ONCE! You are a Socratic tutor.
-
-Whiteboard flow:
-  1. draw_text("Problem: [restate the problem]", x=40, y=60, size=22)
-  2. step_marker(1, x=40, y=110)
-     draw_latex() for the very first expression or setup.
-  3. STOP DRAWING MORE STEPS.
-  4. Verbally ask the student a guiding question: "What do you think we should do next to isolate x?" or "What's the first step here?"
-  5. Wait for the student's response. Only proceed to the next step when they answer or ask for a hint.
-  6. When explaining, heavily use `draw_arrow` and `highlight` to visually connect terms (e.g., showing a number moving to the other side of the equation).
-
-━━━ MODE 3: FOLLOW-UP / QUESTION MODE ━━━
-Triggered when student asks: "why", "can you show", "what if", "I don't understand", "explain step N", "another example"
-
-Whiteboard flow:
-  1. draw_text("↳ [Brief question recap]", x=40, y=next_y, size=20)
-  2. Use `draw_circle`, `highlight`, or `draw_arrow` at the coordinates of the relevant previous step to draw their attention.
-  3. Add draw_latex() explaining that specific detail.
-  4. Follow up by asking if that makes sense now.
-
-━━━ UNIVERSAL RULES (RIGOROUS TUTOR PERSONA) ━━━
-1. You are a friendly, rigorous math tutor for high-school and university students.
-2. NEVER encourage cheating; instead, present as "let's solve this together."
-3. If a question is too vague, ask a clarifying question BEFORE attempting to solve it.
-4. Always show steps, not just final answers. Break solutions into small, numbered steps.
-5. In each step, briefly name the mathematical rule used (e.g., "Chain Rule", "Product Rule", "Distributive Property").
-6. Format all math expressions cleanly using LaTeX-style notation. Use \\frac{}{}, \\int, \\frac{d}{dx}, etc. Use \\cdot or \\times for multiplication (NEVER *).
-7. Call tools IMMEDIATELY — start drawing right away as you speak.
-8. NEVER call clear_whiteboard(). The board preserves all work.
-9. step_marker() for each step heading. Do NOT repeat "Step N" in draw_text.
-10. draw_text() for short labels only (under 25 chars).
-12. FINAL ANSWER: standalone draw_latex() + draw_circle() centered on it.
-13. For each completed solution, end with a short spoken recap in 1–3 sentences summarizing what was learned.
-14. PROACTIVE QUIZZING: After solving a problem, periodically generate a similar practice problem. Explicitly say: "Now, I have a challenge for you. Try solving this on the board: [state problem]". DO NOT draw the solution. Wait for the student.
-
-GRAPHING: draw_graph() with JS Math syntax. width 300, height 220.
-HOMEWORK: Grade each problem with ✓ or show corrections. Always refer explicitly to the photo.
-START DRAWING IMMEDIATELY when the student asks anything."""
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
+HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
+START DRAWING IMMEDIATELY when asked a question."""
 
 # System prompt for standard API (text/image — returns all tools at once)
-WB_SYSTEM_INSTRUCTION = """You are MathBoard, an AI math tutor. You have a whiteboard that updates in real time as you teach.
+WB_SYSTEM_INSTRUCTION = """You are MathBoard, a math tutor. You have a whiteboard.
 
-You operate in THREE teaching modes. Detect the student's intent and choose the right mode automatically.
+RULES:
+1. Call tools IMMEDIATELY — draw the COMPLETE solution in one response.
+2. NEVER call clear_whiteboard(). The board preserves all work.
+3. step_marker() for each step heading. Always start with Step 1 for each new question. Do NOT repeat "Step N" in any draw_text — the marker already renders it.
+4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *). Write it how a human writes on a blackboard.
+5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step" — use step_marker for that. Example: draw_text("Use substitution") not draw_text("Step 1: Use substitution").
+6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200 — no side annotations.
+7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer's x,y coordinates. If the integral has + C, write + C as a SEPARATE draw_latex() call AFTER the circle.
+8. Return ALL tool calls needed for the complete solution.
+9. At the end, use draw_text() to add a brief reference like "Chain Rule" or "Integration by Parts" — name the theorem/technique used.
+10. Use symbolic notation on the board, not prose: write "x \\to \\infty" not "as x approaches infinity". Keep board content mathematical.
+11. For simple arithmetic (e.g. 9×29), give a quick mental math breakdown in 2 steps max — don't over-explain.
 
-━━━ MODE 1: LECTURE MODE ━━━
-Triggered when student says: "teach me about", "explain", "what is", "how does", "introduce", "I want to learn about"
-
-Whiteboard flow — draw ALL of these in one response:
-  1. draw_text("📚 [Topic Title]", x=40, y=60, size=32) — large title header
-  2. draw_latex(the key formula/definition, x=40, y=120, size=30)
-  3. draw_text("[One-line key idea]", x=40, y=175, size=20) — e.g. "Rate of change of a function"
-  4. step_marker(1, x=40, y=220) — label it the "Worked Example"
-     draw_latex(example problem setup, x=40, y=280, size=26)
-  5. step_marker(2..N) — solve the example step by step with draw_latex() at each step
-  6. draw_circle() around the final answer
-  7. draw_text("[Method name]", x=40, y=..., size=18) — name the technique
-
-━━━ MODE 2: PROBLEM SOLVE MODE (SOCRATIC) ━━━
-Triggered when student submits a specific problem, equation, or expression to solve.
-DO NOT OUTPUT THE FULL SOLUTION AT ONCE! You are a live tutor.
-
-Whiteboard flow:
-  1. draw_text("Problem: [restate the problem]", x=40, y=60, size=22)
-  2. step_marker(1, x=40, y=110)
-  3. draw_latex() for the first logical expression or setup of the problem.
-  4. STOP. Do not draw step 2.
-  5. In your spoken response, ask the student: "To get started, what do you think our first move should be?" or "How would we simplify this?" Let them do the work.
-  6. Use `draw_arrow` and `highlight` frequently to connect ideas visually!
-
-━━━ MODE 3: FOLLOW-UP / QUESTION MODE ━━━
-Triggered when student asks: "why", "can you show", "what if", "I don't understand", "explain step N", "another example", or prefixes with [Q1], [Q2]
-
-Whiteboard flow:
-  1. draw_text("↳ [Brief restatement of question]", x=40, y=next_y, size=20)
-  2. draw_circle() at the coordinates of the relevant previous step (highlight it)
-  3. draw_latex() or draw_text() explaining that specific step in detail
-  4. If a new example is requested, add a compact worked example with step markers
-
-━━━ UNIVERSAL RULES (RIGOROUS TUTOR PERSONA) ━━━
-1. You are a friendly, rigorous math tutor for high-school and university students.
-2. NEVER encourage cheating; instead, present as "let's solve this together."
-3. If a question is too vague, ask a clarifying question BEFORE solving.
-4. Always show steps, not just final answers. Break solutions into small, numbered steps.
-5. In each step, briefly name the mathematical rule used (e.g., "Chain Rule", "Product Rule").
-6. Format all math expressions cleanly using LaTeX. Use \\frac{}{}, \\int, \\frac{d}{dx}. Use \\cdot or \\times for multiplication (NEVER *).
-7. Call tools IMMEDIATELY — draw the COMPLETE response in one pass.
-8. NEVER call clear_whiteboard().
-9. step_marker() for each step heading. Do NOT repeat "Step N" in draw_text.
-10. draw_text() for short labels only (under 25 chars).
-11. LAYOUT RULES (CRITICAL — follow EXACTLY):
-    - x between 30–80 for text/latex content.
-    - y starts at 60 for the first element.
-    - Each subsequent element: increment y by AT LEAST 60px (text/latex) or 80px (step_marker).
-    - After draw_graph: next element y = graph_y + graph_height + 30.
-    - NEVER reuse a y coordinate. Each element MUST have a unique, increasing y value.
-    - Maximum content width: 800px. For long expressions, split across multiple lines.
-12. FINAL ANSWER: standalone draw_latex() + draw_circle() on it. If integral has + C, separate draw_latex() AFTER the circle.
-13. Encourage active learning: occasionally ask "Do you want to try the next step yourself?" or offer alternative methods in the spoken summary.
-14. SPOKEN SUMMARY: After ALL drawing tool calls, return a 1–3 sentence spoken recap summarizing what was learned and the final result.
-15. PROACTIVE QUIZZING: After solving a problem, periodically generate a similar practice problem. Explicitly say: "Now, I have a challenge for you. Try solving this on the board: [state problem]". DO NOT output the solution. Wait for the student.
-
-GRAPHING: draw_graph() with JS Math syntax. width 300, height 220.
-HOMEWORK: When image sent, grade each problem with ✓ or show corrections. Include step-by-step reasoning.
-FOLLOW-UPS: If user says "[Q1]" or "[Q2]", answer about that specific previous question.
-START DRAWING IMMEDIATELY when asked anything."""
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
+HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
+FOLLOW-UPS: If user says "[Q1]" or "[Q2]", they are asking about a previous question. Use context from your conversation history to answer.
+START DRAWING IMMEDIATELY when asked a question."""
 
 AUDIO_MODEL = "gemini-2.5-flash-native-audio-latest"
 WHITEBOARD_MODEL = "gemini-2.5-flash-lite"
@@ -268,6 +186,39 @@ RETRYABLE_ERROR_MARKERS = (
 def _is_retryable_error(error: Exception) -> bool:
     message = str(error).lower()
     return any(marker in message for marker in RETRYABLE_ERROR_MARKERS)
+
+
+# Patterns that signal the AI is asking the student a direct question
+_STUDENT_QUESTION_RE = re.compile(
+    r"(?:"
+    r"what do you (?:think|get|notice)|"
+    r"can you (?:try|solve|figure|tell|find|calculate|simplify)|"
+    r"how (?:would|do|did|can|might) you|"
+    r"what (?:is|are|would|could|does|happens)|"
+    r"do you (?:see|know|understand|remember|recall|agree)|"
+    r"does that make sense|"
+    r"your turn|give it a (?:try|shot)|try (?:this|it|solving)|"
+    r"what(?:'s| is) (?:the (?:next|value|result|answer))|"
+    r"which (?:one|method|step)|"
+    r"why (?:do|does|is|are|did|would|might)|"
+    r"where (?:do|does|did)|"
+    r"how (?:many|much)|"
+    r"ready\?|right\?|correct\?|see\?"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _asks_student_question(text: str) -> bool:
+    """Return True if the AI's response asks the student a direct question."""
+    if not text:
+        return False
+    # Check the last ~300 chars (the tail of the response is where questions live)
+    tail = text[-300:].strip()
+    # Must end with "?" to be a question
+    if not tail.endswith("?"):
+        return False
+    return bool(_STUDENT_QUESTION_RE.search(tail))
 
 
 def _build_image_prompt(user_text: str | None) -> str:
@@ -302,7 +253,6 @@ class GeminiSession:
         self._ctx = None
         self._receive_task: asyncio.Task | None = None
         self._connecting = False
-        self._connected_event = asyncio.Event()
         self._speaking = False
         self._audio_transcript_buf: list[str] = []  # capture voice model text
 
@@ -311,6 +261,7 @@ class GeminiSession:
         self._wb_lock = asyncio.Lock()  # prevent concurrent whiteboard generation
         self._wb_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
+        self._awaiting_student_answer = False  # True when AI asked the student a question
         self._closed = False
 
     async def interrupt(self):
@@ -334,11 +285,15 @@ class GeminiSession:
     async def send_text(self, text: str):
         """Text input → standard generate_content API. No WebSocket, no 1011."""
         logger.info(f"[WB] Text question: {text[:80]}...")
+        # If this is a student answer to an AI question, reset the flag.
+        # The whiteboard model already has the conversation context in _wb_history,
+        # so it will naturally continue the same problem.
+        self._awaiting_student_answer = False
         if self._wb_task and not self._wb_task.done():
             self._wb_task.cancel()
         self._wb_task = asyncio.create_task(self._generate_whiteboard(text))
 
-    async def send_image(self, base64_data: str, text: str | None = None):
+    async def send_image(self, base64_data: str):
         """Image input → standard generate_content API."""
         if "," in base64_data:
             base64_data = base64_data.split(",", 1)[1]
@@ -352,42 +307,10 @@ class GeminiSession:
             types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_bytes)),
         ]
         logger.info("[WB] Image uploaded — analyzing via standard API")
-        if self._wb_task and not self._wb_task.done():
-            self._wb_task.cancel()
-        self._wb_task = asyncio.create_task(self._generate_whiteboard(
-            _build_image_prompt(text),
+        await self._generate_whiteboard(
+            "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard.",
             image_parts=image_parts,
-        ))
-
-    async def _generate_with_retry(self, *, config: types.GenerateContentConfig):
-        last_error: Exception | None = None
-        for attempt in range(STANDARD_API_RETRIES):
-            try:
-                return await asyncio.wait_for(
-                    self._client.aio.models.generate_content(
-                        model=WHITEBOARD_MODEL,
-                        contents=self._wb_history,
-                        config=config,
-                    ),
-                    timeout=60.0,  # 60s max per attempt
-                )
-            except asyncio.TimeoutError:
-                last_error = asyncio.TimeoutError("Gemini API timed out after 60s")
-                logger.warning(f"[WB] API timeout on attempt {attempt + 1}/{STANDARD_API_RETRIES}")
-                if attempt == STANDARD_API_RETRIES - 1:
-                    raise
-                await asyncio.sleep(1.5 * (2 ** attempt))
-            except Exception as e:
-                last_error = e
-                if attempt == STANDARD_API_RETRIES - 1 or not _is_retryable_error(e):
-                    raise
-                wait = 1.5 * (2 ** attempt)
-                logger.warning(
-                    f"[WB] Standard API busy on attempt {attempt + 1}/{STANDARD_API_RETRIES}: {e}. "
-                    f"Retrying in {wait:.1f}s"
-                )
-                await asyncio.sleep(wait)
-        raise last_error or RuntimeError("Standard API request failed")
+        )
 
     async def _generate_whiteboard(self, text: str, image_parts: list | None = None):
         """Generate whiteboard commands via standard generate_content API.
@@ -417,14 +340,17 @@ class GeminiSession:
 
             await self.on_status({"speaking": True})
             total_cmds = 0
-            transcript_emitted = False
 
             try:
                 # Standard API: model returns ALL tool calls in one response.
                 # We process them, send function responses, then get one final text reply.
                 # Max 2 rounds to avoid infinite tool-call loops.
                 for round_num in range(2):
-                    response = await self._generate_with_retry(config=config)
+                    response = await self._client.aio.models.generate_content(
+                        model=WHITEBOARD_MODEL,
+                        contents=self._wb_history,
+                        config=config,
+                    )
 
                     if not response.candidates:
                         logger.warning("[WB] No candidates in response")
@@ -469,7 +395,6 @@ class GeminiSession:
                         full_text = " ".join(text_parts)
                         logger.info(f"  WB transcript: {full_text[:100]}...")
                         await self.on_transcript("tutor", full_text)
-                        transcript_emitted = True
 
                     # If no function calls, model is done
                     if not function_calls:
@@ -490,14 +415,18 @@ class GeminiSession:
                     logger.info("[WB] No transcript from model — emitting fallback for TTS")
                     await self.on_transcript("tutor", fallback)
 
+                # Detect if the AI asked the student a question — tell frontend
+                # so the next student input continues on the same whiteboard page.
+                if text_parts:
+                    combined_text = " ".join(text_parts)
+                    if _asks_student_question(combined_text):
+                        self._awaiting_student_answer = True
+                        await self.on_status({"awaiting_answer": True})
+                        logger.info("[WB] AI asked a question — next student input is a continuation")
+
             except Exception as e:
                 logger.error(f"[WB] Generation error: {e}", exc_info=True)
-                if _is_retryable_error(e):
-                    await self.on_status({
-                        "error": "The AI tutor is under high demand right now. I retried automatically, but it still did not go through. Please try again in a moment."
-                    })
-                else:
-                    await self.on_status({"error": f"Whiteboard error: {str(e)}"})
+                await self.on_status({"error": f"Whiteboard error: {str(e)}"})
             finally:
                 await self.on_status({"speaking": False, "turn_complete": True})
 
@@ -507,41 +436,23 @@ class GeminiSession:
 
     async def send_audio(self, audio_data: bytes):
         """Audio input → Live API (native audio model)."""
-        try:
-            await self.ensure_connected()
-        except Exception as e:
-            logger.error(f"Live API connect failed: {e}", exc_info=True)
-            message = (
-                "The voice tutor is under high demand right now. I retried automatically, but it still did not connect. Please try again in a moment."
-                if _is_retryable_error(e)
-                else f"Voice connection error: {e}"
-            )
-            await self.on_status({"error": message, "connected": False})
-            return
+        await self.ensure_connected()
         if self._session:
-            try:
-                await self._session.send_realtime_input(
-                    audio={"data": audio_data, "mime_type": "audio/pcm"}
-                )
-            except Exception as e:
-                # Live API session dropped mid-stream (e.g. 1011).
-                # _receive_loop is responsible for reconnecting; just clear the dead session.
-                logger.debug(f"Audio send failed (session dropped, reconnect pending): {e}")
-                self._session = None
+            await self._session.send_realtime_input(
+                audio={"data": audio_data, "mime_type": "audio/pcm"}
+            )
 
     async def ensure_connected(self):
         """Lazily connect the Live API on first audio use."""
         if self._session and not self._connecting:
             return
         if self._connecting:
-            # Wait for in-progress connection using event instead of spin-wait
-            try:
-                await asyncio.wait_for(self._connected_event.wait(), timeout=10.0)
-                if self._session:
+            for _ in range(100):  # up to 10s
+                await asyncio.sleep(0.1)
+                if self._session and not self._connecting:
                     return
-            except asyncio.TimeoutError:
-                logger.info("Timed out waiting for Live API reconnect; forcing new connection")
-                self._connecting = False
+            logger.info("Timed out waiting for Live API reconnect; forcing new connection")
+            self._connecting = False
         logger.info("Opening new Live API session for voice...")
         await self.connect()
 
@@ -556,38 +467,16 @@ class GeminiSession:
                 ),
                 tools=WHITEBOARD_TOOLS,
             )
-            last_error: Exception | None = None
-            for attempt in range(LIVE_CONNECT_RETRIES):
-                try:
-                    self._ctx = self._client.aio.live.connect(
-                        model=AUDIO_MODEL, config=live_config
-                    )
-                    self._session = await self._ctx.__aenter__()
-                    self._receive_task = asyncio.create_task(self._receive_loop())
-                    return
-                except Exception as e:
-                    last_error = e
-                    self._session = None
-                    self._ctx = None
-                    if attempt == LIVE_CONNECT_RETRIES - 1 or not _is_retryable_error(e):
-                        raise
-                    wait = 1.5 * (2 ** attempt)
-                    logger.warning(
-                        f"Live API busy on connect attempt {attempt + 1}/{LIVE_CONNECT_RETRIES}: {e}. "
-                        f"Retrying in {wait:.1f}s"
-                    )
-                    await asyncio.sleep(wait)
-            raise last_error or RuntimeError("Live API connection failed")
+            self._ctx = self._client.aio.live.connect(
+                model=AUDIO_MODEL, config=live_config
+            )
+            self._session = await self._ctx.__aenter__()
+            self._receive_task = asyncio.create_task(self._receive_loop())
         finally:
             self._connecting = False
-            self._connected_event.set()
-            # Reset for next wait cycle
-            self._connected_event = asyncio.Event()
 
     async def _reconnect(self):
         """Reconnect Live API after internal error (called from _receive_loop)."""
-        if self._closed:
-            return False
         logger.info("Cleaning up old Live API session...")
         try:
             self._receive_task = None  # don't cancel — we ARE the receive task
@@ -606,10 +495,7 @@ class GeminiSession:
             try:
                 await self.connect()
                 logger.info("Live API reconnected!")
-                try:
-                    await self.on_status({"connected": True, "reconnected": True})
-                except Exception:
-                    pass  # client may have left while we were reconnecting
+                await self.on_status({"connected": True, "reconnected": True})
                 return True
             except Exception as e:
                 logger.info(f"Reconnect attempt {attempt + 1} failed: {e}")
@@ -630,38 +516,20 @@ class GeminiSession:
             pass
         except Exception as e:
             error_str = str(e)
-
-            # Code 1000 = normal close — the client disconnected cleanly.
-            # There is nothing to report and nobody to report it to.
-            if ("1000" in error_str and "None" in error_str) or "ConnectionClosedOK" in type(e).__name__:
-                logger.info("Live API closed normally (1000) — client disconnected")
-                return
-
-            # 1011 and 1008 are expected from the native-audio model — reconnect quietly.
+            # 1011 and 1008 are expected for native audio model — just reconnect quietly
             if "1011" in error_str or "internal" in error_str.lower():
                 logger.info(f"Live API session ended (expected): {error_str[:80]}")
-                try:
-                    await self.on_status({"reconnecting": True})
-                except Exception:
-                    return  # client already gone
+                await self.on_status({"reconnecting": True})
                 if await self._reconnect():
                     return
             elif "1008" in error_str or "policy" in error_str.lower():
                 logger.info(f"Live API policy error (expected): {error_str[:80]}")
-                try:
-                    await self.on_status({"reconnecting": True})
-                except Exception:
-                    return
+                await self.on_status({"reconnecting": True})
                 if await self._reconnect():
                     return
             else:
                 logger.error(f"Live API unexpected error: {error_str}")
-
-            # Best-effort notification to client (may already be gone)
-            try:
-                await self.on_status({"error": f"Voice session lost: {error_str[:100]}", "connected": False})
-            except Exception:
-                pass
+            await self.on_status({"error": f"Voice session lost: {error_str[:100]}", "connected": False})
 
     async def _handle_response(self, response):
         """Process a single Live API response."""
@@ -713,10 +581,17 @@ class GeminiSession:
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                 self._speaking = False
                 await self.on_status({"speaking": False, "turn_complete": True})
+                # Check if voice AI asked the student a question before clearing buffers
+                if self._audio_transcript_buf:
+                    voice_text = " ".join(self._audio_transcript_buf)
+                    if _asks_student_question(voice_text):
+                        self._awaiting_student_answer = True
+                        await self.on_status({"awaiting_answer": True})
+                        logger.info("[Voice] AI asked a question — next input is a continuation")
                 # Sync voice context to whiteboard history for follow-up questions
                 self._sync_voice_context()
-                # Keep the Live API session alive for back-and-forth conversation.
-                # The session will reconnect automatically via _reconnect() if it drops.
+                # Proactive teardown — native audio model drops idle connections anyway
+                asyncio.create_task(self._teardown_session())
 
     def _sync_voice_context(self):
         """Add voice conversation context to whiteboard history so text follow-ups have context."""
@@ -755,11 +630,6 @@ class GeminiSession:
 
     async def close(self):
         """Close all sessions."""
-        self._closed = True
-        # Cancel tracked reconnect task
-        if self._reconnect_task and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
         # Close Live API
         if self._receive_task:
             self._receive_task.cancel()

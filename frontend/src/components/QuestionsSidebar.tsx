@@ -425,7 +425,7 @@ export function QuestionsSidebar({
                         {q.label}
                       </span>
                       {/* Step count badge */}
-                      {q.stepCount > 0 && (
+                      {(q.stepCount ?? 0) > 0 && (
                         <span
                           className="text-[9px] font-medium px-1.5 py-[1px] rounded-full"
                           style={{ background: "rgba(148,163,184,0.08)", color: "var(--text-muted)" }}

@@ -264,7 +264,7 @@ async def websocket_session(ws: WebSocket):
                 except (binascii.Error, ValueError) as e:
                     logger.warning(f"Malformed audio base64 — skipping: {e}")
                     continue
-                await session.send_audio(audio_bytes)
+                _track_task(asyncio.create_task(session.send_audio(audio_bytes)))
 
             elif msg_type == "text":
                 text = (payload.get("text", "") or "")[:2000]  # cap at 2000 chars

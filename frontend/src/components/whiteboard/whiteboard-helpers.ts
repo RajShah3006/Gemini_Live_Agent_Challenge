@@ -68,6 +68,16 @@ export function extractMath(text: string): string {
 export function latexToHuman(s: string): string {
   if (s == null || typeof s !== "string") return String(s ?? "");
   let r = s;
+  // Strip LaTeX delimiters: $$...$$, $...$, \[...\], \(...\)
+  r = r.replace(/^\$\$([\s\S]*)\$\$$/g, "$1");
+  r = r.replace(/^\$([\s\S]*)\$$/g, "$1");
+  r = r.replace(/^\\\[([\s\S]*)\\\]$/g, "$1");
+  r = r.replace(/^\\\(([\s\S]*)\\\)$/g, "$1");
+  // Strip inline delimiters that appear mid-string
+  r = r.replace(/\$\$([^$]+)\$\$/g, "$1");
+  r = r.replace(/\$([^$]+)\$/g, "$1");
+  r = r.replace(/\\\(([^)]+)\\\)/g, "$1");
+  r = r.replace(/\\\[([^\]]+)\\\]/g, "$1");
   r = r.replace(/\f/g, "\\f");
   r = r.replace(/\t/g, "\\t");
   r = r.replace(/\x08/g, "\\b");

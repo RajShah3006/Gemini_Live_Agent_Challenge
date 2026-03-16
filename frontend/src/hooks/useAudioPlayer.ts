@@ -10,11 +10,15 @@ import { useCallback, useRef, useState } from "react";
 export function useAudioPlayer() {
   const [isPlaying, setIsPlaying] = useState(false);
   const contextRef = useRef<AudioContext | null>(null);
+  const gainRef = useRef<GainNode | null>(null);
   const nextStartRef = useRef(0);
 
   const getContext = useCallback(() => {
     if (!contextRef.current || contextRef.current.state === "closed") {
       contextRef.current = new AudioContext({ sampleRate: 24000 });
+      const gain = contextRef.current.createGain();
+      gain.connect(contextRef.current.destination);
+      gainRef.current = gain;
       nextStartRef.current = 0;
     }
     return contextRef.current;
@@ -45,7 +49,7 @@ export function useAudioPlayer() {
 
         const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(ctx.destination);
+        source.connect(gainRef.current || ctx.destination);
 
         const now = ctx.currentTime;
         const startTime = Math.max(now, nextStartRef.current);
@@ -72,8 +76,20 @@ export function useAudioPlayer() {
   );
 
   const stop = useCallback(() => {
-    if (contextRef.current) {
-      contextRef.current.close();
+    const ctx = contextRef.current;
+    const gain = gainRef.current;
+    if (ctx && gain) {
+      // Smooth 120ms fadeout to avoid click/pop
+      const now = ctx.currentTime;
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0, now + 0.12);
+      setTimeout(() => {
+        ctx.close().catch(() => {});
+        contextRef.current = null;
+        gainRef.current = null;
+      }, 130);
+    } else if (ctx) {
+      ctx.close().catch(() => {});
       contextRef.current = null;
     }
     nextStartRef.current = 0;

@@ -253,7 +253,7 @@ export default function Home() {
 
   // Wrap sendText to show feedback toast
   const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
-    sendText(text, imageBase64);
+    sendText(text);
     const label = imageBase64 ? "📷 Image sent" : text ? "✅ Sent" : "";
     if (label) {
       setSentToast(label);
