@@ -71,9 +71,10 @@ export function FormulaSheet({ onInsert }: FormulaSheetProps) {
       </button>
       {open && (
         <div
-          className="fixed right-[300px] top-[52px] bottom-0 z-30 flex flex-col overflow-hidden"
+          className="fixed top-[52px] bottom-0 z-30 flex flex-col overflow-hidden"
           style={{
             width: 260,
+            right: "min(300px, 30vw)",
             background: "var(--bg-surface)",
             borderLeft: "1px solid var(--border)",
             borderRight: "1px solid var(--border)",

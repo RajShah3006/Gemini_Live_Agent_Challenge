@@ -208,9 +208,12 @@ export function QuestionsSidebar({
   // Group transcript per question
   const getQTranscript = useCallback(
     (q: QuestionInfo) => {
-      const userIdx = transcript.findIndex(
-        (t) => t.role === "user" && q.text && t.text.includes(q.text.slice(0, 20))
-      );
+      const prefix = q.text ? q.text.slice(0, 30).toLowerCase() : "";
+      const userIdx = prefix
+        ? transcript.findIndex(
+            (t) => t.role === "user" && t.text.toLowerCase().includes(prefix)
+          )
+        : -1;
       const nextUserIdx =
         userIdx >= 0 ? transcript.findIndex((t, i) => i > userIdx && t.role === "user") : -1;
       const endIdx = nextUserIdx >= 0 ? nextUserIdx : transcript.length;

@@ -293,7 +293,7 @@ class GeminiSession:
             self._wb_task.cancel()
         self._wb_task = asyncio.create_task(self._generate_whiteboard(text))
 
-    async def send_image(self, base64_data: str):
+    async def send_image(self, base64_data: str, user_text: str = ""):
         """Image input → standard generate_content API."""
         if "," in base64_data:
             base64_data = base64_data.split(",", 1)[1]
@@ -306,11 +306,11 @@ class GeminiSession:
         image_parts = [
             types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=image_bytes)),
         ]
-        logger.info("[WB] Image uploaded — analyzing via standard API")
-        await self._generate_whiteboard(
-            "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard.",
-            image_parts=image_parts,
+        prompt = user_text.strip() if user_text.strip() else (
+            "Please analyze this image, identify the math problem(s), and solve them step by step on the whiteboard."
         )
+        logger.info(f"[WB] Image uploaded — analyzing via standard API (prompt: {prompt[:60]})")
+        await self._generate_whiteboard(prompt, image_parts=image_parts)
 
     async def _generate_whiteboard(self, text: str, image_parts: list | None = None):
         """Generate whiteboard commands via standard generate_content API.
@@ -340,6 +340,7 @@ class GeminiSession:
 
             await self.on_status({"speaking": True})
             total_cmds = 0
+            transcript_emitted = False
 
             try:
                 # Standard API: model returns ALL tool calls in one response.
@@ -395,6 +396,7 @@ class GeminiSession:
                         full_text = " ".join(text_parts)
                         logger.info(f"  WB transcript: {full_text[:100]}...")
                         await self.on_transcript("tutor", full_text)
+                        transcript_emitted = True
 
                     # If no function calls, model is done
                     if not function_calls:

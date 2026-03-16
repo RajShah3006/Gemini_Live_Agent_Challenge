@@ -114,15 +114,14 @@ export function VoicePanel({
 
   if (!isConnected) {
     return (
-      <div className="flex w-full flex-col items-center gap-5 py-2">
+      <div className="flex w-full flex-col items-center gap-5 py-2" style={{ animation: "fadeIn 0.3s ease-out" }}>
         {/* Hero CTA */}
         <div className="flex flex-col items-center gap-2 w-full max-w-md">
           <button
             onClick={onConnect}
-            className="focus-ring w-full rounded-2xl px-8 py-4 text-base font-bold text-white transition-all hover:brightness-110 hover:scale-[1.01] active:scale-[0.99] shadow-lg"
+            className="focus-ring w-full rounded-2xl px-8 py-4 text-base font-bold text-white transition-all hover:brightness-110 active:scale-[0.99] shadow-lg"
             style={{
               background: "linear-gradient(135deg, #5B6BF8, #7C3AED)",
-              animation: "pulseGlow 2.5s ease-in-out infinite",
               boxShadow: "0 4px 24px rgba(91,107,248,0.35)",
             }}
             aria-label="Start tutoring session"
@@ -164,7 +163,7 @@ export function VoicePanel({
   }
 
   return (
-    <div className="flex w-full flex-col gap-3">
+    <div className="flex w-full flex-col gap-3" style={{ animation: "fadeIn 0.3s ease-out" }}>
       {/* Accessibility live region */}
       <div aria-live="polite" className="sr-only">
         {isThinking ? "AI is generating explanation" : isSpeaking ? "Tutor explaining" : isListening ? "Listening" : imageError ? "Error: " + imageError : "Ready"}

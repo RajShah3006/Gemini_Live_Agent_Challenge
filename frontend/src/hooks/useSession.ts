@@ -217,7 +217,12 @@ export function useSession() {
             ws.send(JSON.stringify({ type: "ping", payload: {} }));
           }
         }, 25_000); // every 25s — well within 5min backend timeout
-        startMic();
+        // Mic is lazily initialized on first push-to-talk to avoid browser
+        // permission popup glitch on connect.
+        if (!micInitializedRef.current) {
+          micInitializedRef.current = true;
+          startMic();
+        }
       };
       ws.onclose = () => {
         // Stop heartbeat
@@ -246,10 +251,12 @@ export function useSession() {
     };
 
     attemptConnect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleMessage, startMic, stopMic, stopAudio]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
+    micInitializedRef.current = false;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     if (heartbeatIntervalRef.current) {
       clearInterval(heartbeatIntervalRef.current);

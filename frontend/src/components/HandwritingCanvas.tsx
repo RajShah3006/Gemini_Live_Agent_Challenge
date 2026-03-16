@@ -62,11 +62,18 @@ export function HandwritingCanvas({ onSubmit }: HandwritingCanvasProps) {
     }, "image/png");
   }, [onSubmit, clearCanvas]);
 
-  // Reset canvas size when activated
+  // Scale canvas for hi-DPI displays
   useEffect(() => {
     if (active && canvasRef.current) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvasRef.current.getBoundingClientRect();
+      canvasRef.current.width = rect.width * dpr;
+      canvasRef.current.height = rect.height * dpr;
       const ctx = canvasRef.current.getContext("2d");
-      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      if (ctx) {
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, rect.width, rect.height);
+      }
     }
   }, [active]);
 
@@ -124,8 +131,6 @@ export function HandwritingCanvas({ onSubmit }: HandwritingCanvasProps) {
         <div className="p-3">
           <canvas
             ref={canvasRef}
-            width={460}
-            height={260}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -133,6 +138,7 @@ export function HandwritingCanvas({ onSubmit }: HandwritingCanvasProps) {
             className="rounded-lg cursor-crosshair touch-none"
             style={{
               width: "100%",
+              height: 260,
               background: "rgba(15,20,40,0.8)",
               border: "1px solid rgba(148,163,184,0.1)",
             }}
