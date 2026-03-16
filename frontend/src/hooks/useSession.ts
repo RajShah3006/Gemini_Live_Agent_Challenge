@@ -151,6 +151,16 @@ export function useSession() {
     setIsThinking(false);
   }, []);
 
+  const startThinking = useCallback(() => {
+    setIsThinking(true);
+    if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+    thinkingTimerRef.current = setTimeout(() => {
+      setIsThinking(false);
+      setErrorMessage("No response received — try again");
+      setTimeout(() => setErrorMessage(null), 5000);
+    }, 20_000);
+  }, []);
+
   const addTranscript = useCallback(
     (role: "user" | "tutor", text: string) => {
       setTranscript((prev) => [
@@ -183,7 +193,7 @@ export function useSession() {
         const msg: ServerMessage = JSON.parse(event.data);
         switch (msg.type) {
           case "whiteboard":
-            setIsThinking(false);
+            clearThinking();
             setWhiteboardCommands((prev) => [
               ...prev,
               msg.payload as unknown as WhiteboardCommand,
@@ -214,7 +224,7 @@ export function useSession() {
             // Flush audio queue on interruption
             if (msg.payload.interrupted) {
               stopAudio();
-              setIsThinking(false);
+              clearThinking();
             }
             // Handle awaiting_answer BEFORE turn_complete so ref is set atomically
             if (msg.payload.awaiting_answer !== undefined) {
@@ -222,7 +232,7 @@ export function useSession() {
               setAwaitingAnswer(!!msg.payload.awaiting_answer);
             }
             if (msg.payload.turn_complete) {
-              setIsThinking(false);
+              clearThinking();
             }
             if (msg.payload.error) {
               setErrorMessage(msg.payload.error as string);
@@ -230,7 +240,7 @@ export function useSession() {
             }
             break;
           case "audio":
-            setIsThinking(false);
+            clearThinking();
             if (msg.payload.data) {
               playChunk(msg.payload.data as string);
             }
@@ -250,7 +260,7 @@ export function useSession() {
         console.error("Failed to parse server message");
       }
     },
-    [addTranscript, playChunk, playTtsAudio, stopAudio, speakText],
+    [addTranscript, clearThinking, playChunk, playTtsAudio, stopAudio, speakText],
   );
 
   // Keep a stable ref to handleMessage so the WS onmessage callback always
@@ -354,12 +364,14 @@ export function useSession() {
   }, [startMic, stopAudio]);
 
   const stopTalking = useCallback(() => {
-    micActiveRef.current = false;
     setIsListening(false);
-    setIsThinking(true);
-  }, []);
-
-  // Spacebar push-to-talk
+    startThinking();
+    // Keep micActiveRef true for 600ms so silence frames flow to the Live API.
+    // The VAD needs trailing silence to detect end-of-speech.
+    setTimeout(() => {
+      micActiveRef.current = false;
+    }, 600);
+  }, [startThinking]);
   useEffect(() => {
     if (!isConnected) return;
     const down = (e: KeyboardEvent) => {
@@ -406,9 +418,9 @@ export function useSession() {
       ]);
       send("image", { data: base64 });
       addTranscript("user", "📷 Uploaded an image");
-      setIsThinking(true);
+      startThinking();
     },
-    [send, addTranscript, setWhiteboardCommands],
+    [send, addTranscript, setWhiteboardCommands, startThinking],
   );
 
   const interrupt = useCallback(() => {
@@ -451,9 +463,9 @@ export function useSession() {
       ]);
       send("text", { text: cleaned });
       addTranscript("user", cleaned);
-      setIsThinking(true);
+      startThinking();
     },
-    [send, addTranscript],
+    [send, addTranscript, startThinking],
   );
 
   useEffect(() => {
