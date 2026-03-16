@@ -195,6 +195,11 @@ export function useSession() {
     [addTranscript, playChunk, stopAudio],
   );
 
+  // Keep a stable ref to handleMessage so the WS onmessage callback always
+  // calls the latest version without needing to recreate the WebSocket.
+  const handleMessageRef = useRef(handleMessage);
+  handleMessageRef.current = handleMessage;
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     intentionalDisconnectRef.current = false;
@@ -217,12 +222,9 @@ export function useSession() {
             ws.send(JSON.stringify({ type: "ping", payload: {} }));
           }
         }, 25_000); // every 25s — well within 5min backend timeout
-        // Mic is lazily initialized on first push-to-talk to avoid browser
-        // permission popup glitch on connect.
-        if (!micInitializedRef.current) {
-          micInitializedRef.current = true;
-          startMic();
-        }
+        // Mic is lazily initialized on first push-to-talk interaction
+        // (see startTalking) — NOT on connect — to avoid browser permission
+        // popup glitch.
       };
       ws.onclose = () => {
         // Stop heartbeat
@@ -234,6 +236,7 @@ export function useSession() {
         setIsListening(false);
         setIsSpeaking(false);
         stopMic();
+        micInitializedRef.current = false; // allow re-init on next push-to-talk
         stopAudio();
         // Auto-reconnect with exponential backoff (unless intentional disconnect)
         if (!intentionalDisconnectRef.current && reconnectAttemptRef.current < 5) {
@@ -245,14 +248,14 @@ export function useSession() {
           setConnectionStatus("failed");
         }
       };
-      ws.onmessage = handleMessage;
+      ws.onmessage = (e) => handleMessageRef.current(e);
       ws.onerror = () => ws.close();
       wsRef.current = ws;
     };
 
     attemptConnect();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleMessage, startMic, stopMic, stopAudio]);
+  }, [stopMic, stopAudio]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
@@ -272,11 +275,16 @@ export function useSession() {
 
   // Push-to-talk: hold Space to talk
   const startTalking = useCallback(() => {
+    // Lazy mic init on first push-to-talk (avoids permission popup on connect)
+    if (!micInitializedRef.current) {
+      micInitializedRef.current = true;
+      startMic();
+    }
     micActiveRef.current = true;
     setIsListening(true);
     // Flush tutor audio so student can interrupt
     stopAudio();
-  }, [stopAudio]);
+  }, [startMic, stopAudio]);
 
   const stopTalking = useCallback(() => {
     micActiveRef.current = false;

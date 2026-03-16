@@ -62,6 +62,7 @@ export function VoicePanel({
   const [mode, setMode] = useState<"teacher" | "quick">("teacher");
   const [inputMode, setInputMode] = useState<"text" | "math">("text");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingQuestionRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Dynamically load MathLive on the client only
@@ -72,6 +73,17 @@ export function VoicePanel({
       }
     });
   }, []);
+
+  // Auto-send queued sample question once connection opens
+  useEffect(() => {
+    if (isConnected && pendingQuestionRef.current) {
+      const q = pendingQuestionRef.current;
+      pendingQuestionRef.current = null;
+      onTextInputChange(q);
+      // Small delay to ensure WS is ready and text is set
+      setTimeout(() => onSendText(q), 100);
+    }
+  }, [isConnected, onSendText, onTextInputChange]);
 
   const processImageFile = useCallback(async (file: File) => {
     setImageError(null);
@@ -141,8 +153,14 @@ export function VoicePanel({
             <button
               key={q}
               onClick={() => {
-                onConnect();
-                onTextInputChange(q);
+                if (isConnected) {
+                  // Already connected — send immediately
+                  onSendText(q);
+                } else {
+                  // Queue question and connect — auto-sends once connected
+                  pendingQuestionRef.current = q;
+                  onConnect();
+                }
               }}
               className="focus-ring flex items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[12px] transition-all hover:scale-[1.02] hover:bg-white/5 active:scale-[0.98]"
               style={{

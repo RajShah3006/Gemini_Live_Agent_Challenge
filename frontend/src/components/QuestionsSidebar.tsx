@@ -161,6 +161,7 @@ export function QuestionsSidebar({
 }: QuestionsSidebarProps) {
   const [searchFilter, setSearchFilter] = useState("");
   const [menuOpen, setMenuOpen] = useState<number | null>(null);
+  const closeMenu = useCallback(() => setMenuOpen(null), []);
   const [renames, setRenames] = useState<Record<number, string>>({});
   const [archived, setArchived] = useState<Set<number>>(new Set());
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
@@ -504,7 +505,7 @@ export function QuestionsSidebar({
                   {menuOpen === q.idx && (
                     <ActionMenu
                       onAction={(a) => handleAction(q.idx, a)}
-                      onClose={() => setMenuOpen(null)}
+                      onClose={closeMenu}
                     />
                   )}
 

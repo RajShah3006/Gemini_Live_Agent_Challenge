@@ -60,7 +60,11 @@ _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins or ["http://localhost:3000"],
+    allow_origins=_cors_origins or [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -95,7 +99,11 @@ class GlobalRateLimiter:
 
     def check(self, ip: str) -> bool:
         now = time.time()
-        self._ips[ip] = [t for t in self._ips[ip] if now - t < 60]
+        timestamps = [t for t in self._ips[ip] if now - t < 60]
+        if not timestamps:
+            self._ips.pop(ip, None)  # GC empty entries to prevent memory leak
+        else:
+            self._ips[ip] = timestamps
         if len(self._ips[ip]) >= self._max:
             return False
         self._ips[ip].append(now)
@@ -151,7 +159,7 @@ async def export_whiteboard(session_id: str):
         if not cmds:
             raise HTTPException(status_code=404, detail="No whiteboard data")
         json_bytes = json.dumps(cmds, indent=2).encode()
-        url = whiteboard_svc.upload_export(session_id, json_bytes, "whiteboard.json", "application/json")
+        url = await whiteboard_svc.upload_export(session_id, json_bytes, "whiteboard.json", "application/json")
         return {"url": url, "commands": len(cmds)}
     except HTTPException:
         raise
@@ -233,6 +241,41 @@ async def websocket_session(ws: WebSocket):
                     logger.error(f"Background task crashed: {exc}", exc_info=exc)
             task.add_done_callback(_done)
 
+        # ── Task helpers (defined once, not per-iteration) ──
+        async def _handle_text(t_str: str):
+            try:
+                await session.send_text(t_str)
+                if session_id:
+                    try:
+                        await session_svc.save_message(session_id, "user", t_str)
+                    except Exception as e:
+                        logger.warning(f"Firestore save failed: {e}")
+            except Exception as e:
+                logger.error(f"Task _handle_text crashed: {e}", exc_info=True)
+                await _send({"type": "status", "payload": {"error": "Failed to process your question — please try again."}})
+
+        async def _handle_image(d_b64: str, t_str: str):
+            try:
+                await session.send_image(d_b64, t_str)
+                if session_id:
+                    try:
+                        await session_svc.save_message(
+                            session_id,
+                            "user",
+                            t_str if t_str else "[image uploaded]",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Firestore save failed: {e}")
+            except Exception as e:
+                logger.error(f"Task _handle_image crashed: {e}", exc_info=True)
+                await _send({"type": "status", "payload": {"error": "Failed to process your image — please try again."}})
+
+        async def _handle_interrupt():
+            try:
+                await session.interrupt()
+            except Exception as e:
+                logger.error(f"Task _handle_interrupt crashed: {e}", exc_info=True)
+
         while True:
             try:
                 raw_text = await asyncio.wait_for(ws.receive_text(), timeout=WS_IDLE_TIMEOUT)
@@ -272,17 +315,6 @@ async def websocket_session(ws: WebSocket):
                     if not limiter.check() or not _global_limiter.check(client_ip):
                         await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
                         continue
-                    async def _handle_text(t_str):
-                        try:
-                            await session.send_text(t_str)
-                            if session_id:
-                                try:
-                                    await session_svc.save_message(session_id, "user", t_str)
-                                except Exception as e:
-                                    logger.warning(f"Firestore save failed: {e}")
-                        except Exception as e:
-                            logger.error(f"Task _handle_text crashed: {e}", exc_info=True)
-                            await _send({"type": "status", "payload": {"error": "Failed to process your question — please try again."}})
                     _track_task(asyncio.create_task(_handle_text(text)))
 
             elif msg_type == "image":
@@ -296,29 +328,9 @@ async def websocket_session(ws: WebSocket):
                     if not limiter.check() or not _global_limiter.check(client_ip):
                         await _send({"type": "status", "payload": {"error": "Slow down — too many requests. Try again in a moment! ☕"}})
                         continue
-                    async def _handle_image(d_b64, t_str):
-                        try:
-                            await session.send_image(d_b64, t_str)
-                            if session_id:
-                                try:
-                                    await session_svc.save_message(
-                                        session_id,
-                                        "user",
-                                        t_str if t_str else "[image uploaded]",
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Firestore save failed: {e}")
-                        except Exception as e:
-                            logger.error(f"Task _handle_image crashed: {e}", exc_info=True)
-                            await _send({"type": "status", "payload": {"error": "Failed to process your image — please try again."}})
                     _track_task(asyncio.create_task(_handle_image(image_data, image_text)))
 
             elif msg_type == "interrupt":
-                async def _handle_interrupt():
-                    try:
-                        await session.interrupt()
-                    except Exception as e:
-                        logger.error(f"Task _handle_interrupt crashed: {e}", exc_info=True)
                 _track_task(asyncio.create_task(_handle_interrupt()))
 
             elif msg_type == "ping":

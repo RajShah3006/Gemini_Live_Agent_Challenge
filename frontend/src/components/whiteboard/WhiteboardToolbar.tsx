@@ -110,6 +110,15 @@ export function WhiteboardToolbar({ canvasRef, containerRef, onUndo, onClear, ca
         border: "1px solid rgba(148,163,184,0.08)",
       }}
     >
+      {/* Single shared SVG filter definition — avoids duplicate id="sketch" per icon */}
+      <svg width="0" height="0" style={{ position: "absolute" }}>
+        <defs>
+          <filter id="sketch">
+            <feTurbulence type="turbulence" baseFrequency="0.04" numOctaves="3" result="noise" seed="2" />
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.2" xChannelSelector="R" yChannelSelector="G" />
+          </filter>
+        </defs>
+      </svg>
       {onUndo && (
         <ToolBtn title="Undo last" onClick={onUndo} disabled={!canUndo}>
           <SketchIcon d="M16 8l-6 6 6 6M10 14h11" />
@@ -152,12 +161,6 @@ function SketchIcon({ d }: { d: string }) {
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
       style={{ filter: "url(#sketch)" }}
     >
-      <defs>
-        <filter id="sketch">
-          <feTurbulence type="turbulence" baseFrequency="0.04" numOctaves="3" result="noise" seed="2" />
-          <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.2" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-      </defs>
       <path d={d} />
     </svg>
   );
