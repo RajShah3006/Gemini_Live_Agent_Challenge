@@ -162,6 +162,41 @@ RE-EXPLAINING: Continue at y=60 incrementing normally. Add more detail.
 FOLLOW-UPS: If user says "[Q1]" or "[Q2]", they are asking about a previous question. Use context from your conversation history to answer.
 START DRAWING IMMEDIATELY when asked a question."""
 
+QUICK_WB_SYSTEM_INSTRUCTION = """You are MathBoard in QUICK mode. You have a whiteboard.
+
+RULES:
+1. Give a DIRECT, CONCISE answer. Skip long step-by-step breakdowns.
+2. NEVER call clear_whiteboard(). The board preserves all work.
+3. Use step_marker() only for 1-2 key steps max. Jump straight to the solution.
+4. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions (NOT \\frac12, NOT inline /). Use \\cdot or \\times for multiplication (NEVER *).
+5. draw_text() for short annotations only (under 25 chars). NEVER start draw_text with "Step".
+6. LAYOUT: All content in a SINGLE column, x always between 30-80. y starts at 60, increment ~60px per line. NEVER put text at x > 200.
+7. FINAL ANSWER: Write the final answer as a standalone draw_latex() call. Then call draw_circle() centered on that answer.
+8. Return ALL tool calls needed. Keep it brief — 2-3 steps max for most problems.
+9. Use symbolic notation on the board, not prose.
+10. For simple arithmetic, give the answer directly in 1 step.
+
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220 to keep compact.
+HOMEWORK: When student sends an image, grade each problem. Use ✓ or show corrections.
+START DRAWING IMMEDIATELY when asked a question. Be fast and direct."""
+
+QUICK_AUDIO_SYSTEM_INSTRUCTION = """You are MathBoard in QUICK mode. You have a whiteboard.
+
+RULES:
+1. Give a DIRECT, CONCISE answer. No long explanations. Get to the point fast.
+2. Call tools IMMEDIATELY — start drawing right away.
+3. NEVER call clear_whiteboard(). The board preserves all work.
+4. Use step_marker() only for 1-2 key steps max. Skip unnecessary detail.
+5. draw_latex() for ALL math. Always use \\frac{}{} with braces for fractions. Use \\cdot or \\times for multiplication.
+6. draw_text() for short annotations only (under 25 chars).
+7. FINAL ANSWER: Write as standalone draw_latex() then draw_circle() on it.
+8. Keep your spoken explanation brief — under 15 seconds.
+9. Use symbolic notation, not prose.
+10. For simple arithmetic, give the answer directly.
+
+GRAPHING: draw_graph() with JS Math syntax. Use width 300, height 220.
+START DRAWING IMMEDIATELY. Be fast and direct."""
+
 AUDIO_MODEL = "gemini-2.5-flash-native-audio-latest"
 WHITEBOARD_MODEL = "gemini-2.5-flash-lite"
 STANDARD_API_RETRIES = 3
@@ -262,6 +297,7 @@ class GeminiSession:
         self._wb_task: asyncio.Task | None = None
         self._reconnect_task: asyncio.Task | None = None
         self._awaiting_student_answer = False  # True when AI asked the student a question
+        self._mode = "teacher"  # "teacher" or "quick"
         self._closed = False
 
     async def interrupt(self):
@@ -277,6 +313,12 @@ class GeminiSession:
         if self._session:
             reconnect_task = asyncio.create_task(self._reconnect())
             self._reconnect_task = reconnect_task
+
+    def set_mode(self, mode: str):
+        """Switch between 'teacher' and 'quick' mode."""
+        if mode in ("teacher", "quick"):
+            self._mode = mode
+            logger.info(f"Mode changed to: {mode}")
 
     # ═══════════════════════════════════════════════════════════
     #  STANDARD API — text & image (zero connection issues)
@@ -331,10 +373,11 @@ class GeminiSession:
             if len(self._wb_history) > 30:
                 self._wb_history = self._wb_history[-30:]
 
+            wb_prompt = QUICK_WB_SYSTEM_INSTRUCTION if self._mode == "quick" else WB_SYSTEM_INSTRUCTION
             config = types.GenerateContentConfig(
                 tools=WHITEBOARD_TOOLS,
                 system_instruction=types.Content(
-                    parts=[types.Part(text=WB_SYSTEM_INSTRUCTION)]
+                    parts=[types.Part(text=wb_prompt)]
                 ),
             )
 
@@ -462,10 +505,11 @@ class GeminiSession:
         """Open a Gemini Live API session (voice)."""
         self._connecting = True
         try:
+            audio_prompt = QUICK_AUDIO_SYSTEM_INSTRUCTION if self._mode == "quick" else AUDIO_SYSTEM_INSTRUCTION
             live_config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
                 system_instruction=types.Content(
-                    parts=[types.Part(text=AUDIO_SYSTEM_INSTRUCTION)]
+                    parts=[types.Part(text=audio_prompt)]
                 ),
                 tools=WHITEBOARD_TOOLS,
             )

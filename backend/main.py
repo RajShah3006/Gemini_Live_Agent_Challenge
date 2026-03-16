@@ -325,6 +325,10 @@ async def websocket_session(ws: WebSocket):
                 # [Heartbeat] Respond to client health checks
                 await _send({"type": "pong", "payload": {}})
 
+            elif msg_type == "set_mode":
+                new_mode = payload.get("mode", "teacher")
+                session.set_mode(new_mode)
+
             elif msg_type == "control":
                 action = payload.get("action", "")
                 if action == "clear":

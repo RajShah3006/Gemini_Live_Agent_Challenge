@@ -383,6 +383,13 @@ export function useSession() {
     });
   }, []);
 
+  const sendMode = useCallback(
+    (mode: "teacher" | "quick") => {
+      send("set_mode", { mode });
+    },
+    [send],
+  );
+
   return {
     isConnected,
     isListening,
@@ -404,5 +411,6 @@ export function useSession() {
     autoMicEnabled,
     toggleAutoMic,
     voiceCommand,
+    sendMode,
   };
 }

@@ -31,6 +31,7 @@ interface VoicePanelProps {
   onStopTalking: () => void;
   onToggleAutoMic: () => void;
   onInterrupt?: () => void;
+  onModeChange?: (mode: "teacher" | "quick") => void;
   questions?: QuestionInfo[];
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   textInput: string;
@@ -50,6 +51,7 @@ export function VoicePanel({
   onStopTalking,
   onToggleAutoMic,
   onInterrupt,
+  onModeChange,
   questions = [],
   inputRef,
   textInput,
@@ -83,10 +85,6 @@ export function VoicePanel({
   const handleSendText = () => {
     let trimmed = textInput.trim();
     if (!trimmed && !pendingImage) return;
-
-    if (mode === "quick") {
-      trimmed += "\n\n[USER TOGGLE: Please provide a direct, quick answer without breaking down every step.]";
-    }
 
     onSendText(trimmed, pendingImage ?? undefined);
     onTextInputChange("");
@@ -376,11 +374,10 @@ export function VoicePanel({
           
           <div className="h-4 w-px bg-[var(--border)] hidden sm:block mx-1" />
 
-          {/* Mode Toggles */}
-          {questions.length === 0 && (
+          {/* Mode Toggles — always visible */}
             <div className="flex items-center gap-1 hidden md:flex">
               <button
-                onClick={() => setMode("teacher")}
+                onClick={() => { setMode("teacher"); onModeChange?.("teacher"); }}
                 className={`focus-ring text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${mode === "teacher" ? "" : "opacity-60 hover:opacity-100"}`}
                 style={{
                   background: mode === "teacher" ? "rgba(91,107,248,0.15)" : "transparent",
@@ -390,7 +387,7 @@ export function VoicePanel({
                 🎓 Teacher
               </button>
               <button
-                onClick={() => setMode("quick")}
+                onClick={() => { setMode("quick"); onModeChange?.("quick"); }}
                 className={`focus-ring text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${mode === "quick" ? "" : "opacity-60 hover:opacity-100"}`}
                 style={{
                   background: mode === "quick" ? "rgba(255,255,255,0.08)" : "transparent",
@@ -400,7 +397,6 @@ export function VoicePanel({
                 ⚡️ Quick
               </button>
             </div>
-          )}
 
           {/* Math Keyboard Toggle */}
           <button

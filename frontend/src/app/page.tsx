@@ -185,6 +185,7 @@ export default function Home() {
     voiceCommand,
     autoMicEnabled,
     toggleAutoMic,
+    sendMode,
   } = useSession();
 
   const [showHistory, setShowHistory] = useState(false);
@@ -521,6 +522,7 @@ export default function Home() {
           inputRef={textInputRef}
           textInput={composerText}
           onTextInputChange={setComposerText}
+          onModeChange={sendMode}
         />
       </div>
 
