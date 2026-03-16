@@ -168,12 +168,13 @@ export function useSession() {
               stopAudio();
               setIsThinking(false);
             }
-            if (msg.payload.turn_complete) {
-              setIsThinking(false);
-            }
+            // Handle awaiting_answer BEFORE turn_complete so ref is set atomically
             if (msg.payload.awaiting_answer !== undefined) {
               awaitingAnswerRef.current = !!msg.payload.awaiting_answer;
               setAwaitingAnswer(!!msg.payload.awaiting_answer);
+            }
+            if (msg.payload.turn_complete) {
+              setIsThinking(false);
             }
             if (msg.payload.error) {
               setErrorMessage(msg.payload.error as string);

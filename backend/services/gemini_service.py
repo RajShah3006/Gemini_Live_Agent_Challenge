@@ -475,20 +475,24 @@ class GeminiSession:
                     logger.info("[WB] No transcript from model — emitting fallback for TTS")
                     await self.on_transcript("tutor", fallback)
 
-                # Detect if the AI asked the student a question — tell frontend
-                # so the next student input continues on the same whiteboard page.
-                if text_parts:
-                    combined_text = " ".join(text_parts)
-                    if _asks_student_question(combined_text):
-                        self._awaiting_student_answer = True
-                        await self.on_status({"awaiting_answer": True})
-                        logger.info("[WB] AI asked a question — next student input is a continuation")
-
             except Exception as e:
                 logger.error(f"[WB] Generation error: {e}", exc_info=True)
                 await self.on_status({"error": f"Whiteboard error: {str(e)}"})
             finally:
-                await self.on_status({"speaking": False, "turn_complete": True})
+                # Detect if AI asked a question BEFORE signaling turn_complete
+                is_asking = False
+                if self._mode == "teacher" and text_parts:
+                    combined_text = " ".join(text_parts)
+                    if _asks_student_question(combined_text):
+                        self._awaiting_student_answer = True
+                        is_asking = True
+                        logger.info("[WB] AI asked a question — next student input is a continuation")
+
+                # Send everything in ONE status message so frontend processes atomically
+                status: dict = {"speaking": False, "turn_complete": True}
+                if is_asking:
+                    status["awaiting_answer"] = True
+                await self.on_status(status)
 
     # ═══════════════════════════════════════════════════════════
     #  LIVE API — voice / audio (native audio model)

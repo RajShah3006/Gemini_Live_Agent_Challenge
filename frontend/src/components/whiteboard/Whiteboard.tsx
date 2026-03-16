@@ -1028,6 +1028,16 @@ function getCommandY(cmd: WhiteboardCommand): number {
   if (cmd.action === "draw_circle") return 0; // draw_circle removed
   if (p.y !== undefined) {
     if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
+    // Account for text height to prevent overlap
+    if (cmd.action === "draw_text" || cmd.action === "draw_latex") {
+      return (p.y as number) + ((p.size as number) || 24) + 8;
+    }
+    if (cmd.action === "step_marker") {
+      return (p.y as number) + 40;
+    }
+    if (cmd.action === "question_header" || cmd.action === "student_answer") {
+      return (p.y as number) + 36;
+    }
     return p.y as number;
   }
   if (p.y1 !== undefined) return Math.max(p.y1 as number, p.y2 as number);
