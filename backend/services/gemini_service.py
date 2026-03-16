@@ -10,7 +10,6 @@ import asyncio
 import base64
 import json
 import logging
-import re
 import uuid
 from typing import Callable, Awaitable
 
@@ -241,26 +240,6 @@ def _is_retryable_error(error: Exception) -> bool:
     return any(marker in message for marker in RETRYABLE_ERROR_MARKERS)
 
 
-# Patterns that signal the AI is asking the student a direct question
-_STUDENT_QUESTION_RE = re.compile(
-    r"(?:"
-    r"what do you (?:think|get|notice)|"
-    r"can you (?:try|solve|figure|tell|find|calculate|simplify)|"
-    r"how (?:would|do|did|can|might) you|"
-    r"what (?:is|are|would|could|does|happens)|"
-    r"do you (?:see|know|understand|remember|recall|agree)|"
-    r"does that make sense|"
-    r"your turn|give it a (?:try|shot)|try (?:this|it|solving)|"
-    r"what(?:'s| is) (?:the (?:next|value|result|answer))|"
-    r"which (?:one|method|step)|"
-    r"why (?:do|does|is|are|did|would|might)|"
-    r"where (?:do|does|did)|"
-    r"how (?:many|much)|"
-    r"ready\?|right\?|correct\?|see\?"
-    r")",
-    re.IGNORECASE,
-)
-
 
 def _asks_student_question(text: str) -> bool:
     """Return True if the AI's response asks the student a direct question.
@@ -316,7 +295,6 @@ class GeminiSession:
         self._reconnect_task: asyncio.Task | None = None
         self._awaiting_student_answer = False  # True when AI asked the student a question
         self._mode = "teacher"  # "teacher" or "quick"
-        self._closed = False
 
     async def interrupt(self):
         """Immediately stop all generating tasks (both text and voice)."""
@@ -329,8 +307,10 @@ class GeminiSession:
             
         # Nuke Voice API session to stop current output
         if self._session:
-            reconnect_task = asyncio.create_task(self._reconnect())
-            self._reconnect_task = reconnect_task
+            # Cancel any in-progress reconnect before starting a new one
+            if self._reconnect_task and not self._reconnect_task.done():
+                self._reconnect_task.cancel()
+            self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def set_mode(self, mode: str):
         """Switch between 'teacher' and 'quick' mode."""
@@ -619,7 +599,7 @@ class GeminiSession:
                 await self.on_status({"speaking": True})
 
         # Handle tool calls (whiteboard commands from voice)
-        if response.tool_call:
+        if response.tool_call and response.tool_call.function_calls:
             logger.info(f"[Voice] {len(response.tool_call.function_calls)} tool call(s)")
             function_responses = []
             for fc in response.tool_call.function_calls:
@@ -655,6 +635,9 @@ class GeminiSession:
                 for part in response.server_content.model_turn.parts:
                     if hasattr(part, 'text') and part.text:
                         self._audio_transcript_buf.append(part.text)
+                        # Bound buffer to prevent memory leak on long voice sessions
+                        if len(self._audio_transcript_buf) > 100:
+                            self._audio_transcript_buf = self._audio_transcript_buf[-50:]
 
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                 self._speaking = False
@@ -693,21 +676,6 @@ class GeminiSession:
     # ═══════════════════════════════════════════════════════════
     #  Session lifecycle
     # ═══════════════════════════════════════════════════════════
-
-    async def _teardown_session(self):
-        """Tear down Live API session after a voice turn."""
-        logger.debug("Tearing down Live API session post-turn")
-        try:
-            if self._receive_task:
-                self._receive_task.cancel()
-                self._receive_task = None
-            if self._session and self._ctx:
-                await self._ctx.__aexit__(None, None, None)
-        except Exception as e:
-            logger.debug(f"Teardown cleanup: {e}")
-        self._session = None
-        self._ctx = None
-        self._connecting = False
 
     async def close(self):
         """Close all sessions."""

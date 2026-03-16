@@ -56,6 +56,13 @@ export function useSession() {
 
   // [Fix 1] Thinking timeout ref
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thinkingErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Timeout ref for stopTalking mic delay
+  const micDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Error message auto-clear timer
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // [Fix 2] Heartbeat refs
   const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -101,9 +108,10 @@ export function useSession() {
       if (!ttsEnabledRef.current) return;
       // Don't play TTS if voice (Live API) is active — it has its own audio
       if (micActiveRef.current) return;
-      // Stop any currently playing TTS
+      // Stop any currently playing TTS and release resources
       if (ttsAudioRef.current) {
         ttsAudioRef.current.pause();
+        ttsAudioRef.current.src = "";
       }
       const audio = new Audio(`data:audio/mp3;base64,${base64Mp3}`);
       ttsAudioRef.current = audio;
@@ -148,16 +156,24 @@ export function useSession() {
       clearTimeout(thinkingTimerRef.current);
       thinkingTimerRef.current = null;
     }
+    if (thinkingErrorTimerRef.current) {
+      clearTimeout(thinkingErrorTimerRef.current);
+      thinkingErrorTimerRef.current = null;
+    }
     setIsThinking(false);
   }, []);
 
   const startThinking = useCallback(() => {
     setIsThinking(true);
     if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+    if (thinkingErrorTimerRef.current) clearTimeout(thinkingErrorTimerRef.current);
     thinkingTimerRef.current = setTimeout(() => {
       setIsThinking(false);
       setErrorMessage("No response received — try again");
-      setTimeout(() => setErrorMessage(null), 5000);
+      thinkingErrorTimerRef.current = setTimeout(() => {
+        setErrorMessage(null);
+        thinkingErrorTimerRef.current = null;
+      }, 5000);
     }, 20_000);
   }, []);
 
@@ -236,7 +252,8 @@ export function useSession() {
             }
             if (msg.payload.error) {
               setErrorMessage(msg.payload.error as string);
-              setTimeout(() => setErrorMessage(null), 6000);
+              if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+              errorTimerRef.current = setTimeout(() => { setErrorMessage(null); errorTimerRef.current = null; }, 6000);
             }
             break;
           case "audio":
@@ -253,7 +270,8 @@ export function useSession() {
           case "error":
             console.error("Server error:", msg.payload);
             setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
-            setTimeout(() => setErrorMessage(null), 6000);
+            if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+            errorTimerRef.current = setTimeout(() => { setErrorMessage(null); errorTimerRef.current = null; }, 6000);
             break;
         }
       } catch {
@@ -269,7 +287,8 @@ export function useSession() {
   handleMessageRef.current = handleMessage;
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING) return;
     intentionalDisconnectRef.current = false;
     // Clear any pending reconnect timer to prevent duplicate connections
     if (reconnectTimerRef.current) {
@@ -366,10 +385,13 @@ export function useSession() {
   const stopTalking = useCallback(() => {
     setIsListening(false);
     startThinking();
+    // Clean up any previous mic delay timer
+    if (micDelayTimerRef.current) clearTimeout(micDelayTimerRef.current);
     // Keep micActiveRef true for 600ms so silence frames flow to the Live API.
     // The VAD needs trailing silence to detect end-of-speech.
-    setTimeout(() => {
+    micDelayTimerRef.current = setTimeout(() => {
       micActiveRef.current = false;
+      micDelayTimerRef.current = null;
     }, 600);
   }, [startThinking]);
   useEffect(() => {
@@ -472,6 +494,10 @@ export function useSession() {
     return () => {
       stopMic();
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      if (micDelayTimerRef.current) clearTimeout(micDelayTimerRef.current);
+      if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
+      if (thinkingErrorTimerRef.current) clearTimeout(thinkingErrorTimerRef.current);
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
       wsRef.current?.close();
     };
   }, [stopMic]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { QuestionBoardCards } from "@/components/QuestionBoardCards";
 import { VoicePanel } from "@/components/voice/VoicePanel";
 import { SessionHistory } from "@/components/SessionHistory";
@@ -283,14 +283,14 @@ export default function Home() {
     });
   }, [activePageId, transcript, whiteboardCommands, setTranscript, setWhiteboardCommands, disconnect, isConnected, connect]);
 
-  const cards = groupWhiteboardCommands(whiteboardCommands);
-  const questions = cards.map((c, idx) => ({
+  const cards = useMemo(() => groupWhiteboardCommands(whiteboardCommands), [whiteboardCommands]);
+  const questions = useMemo(() => cards.map((c, idx) => ({
     label: c.label,
     text: c.text,
     stepCount: c.stepCount,
     idx,
     yStart: idx,
-  }));
+  })), [cards]);
 
   // Wrap sendText to show feedback toast
   const sendTextWithToast = useCallback((text: string, imageBase64?: string) => {
@@ -335,7 +335,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showHistory]);
+  }, [showHistory, showSidebar]);
 
   // Auto-scroll and auto-focus transcript
   useEffect(() => {

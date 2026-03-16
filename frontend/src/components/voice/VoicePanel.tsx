@@ -77,7 +77,7 @@ export function VoicePanel({
       if (ml.MathfieldElement) {
         ml.MathfieldElement.fontsDirectory = "/mathlive-fonts/";
       }
-    });
+    }).catch((err) => console.debug("MathLive load failed:", err));
   }, []);
 
   // Auto-send queued sample question once connection opens

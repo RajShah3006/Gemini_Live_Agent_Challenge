@@ -20,6 +20,7 @@ import {
   animatedLine,
   animateCmd,
   drawInstant,
+  latexToHuman,
   CONTENT_SIZE as HELPERS_CONTENT_SIZE,
   type SetCursor,
 } from "./whiteboard-helpers";
@@ -71,140 +72,6 @@ function extractMath(text: string): string {
   }
   // If no math found, return the full text (it might be the expression itself)
   return text;
-}
-
-/* ── LaTeX → human-readable math ── */
-/* ── Unicode superscript helper ── */
-const SUP_MAP: Record<string, string> = {
-  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵",
-  "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻",
-  "=": "⁼", "(": "⁽", ")": "⁾", "n": "ⁿ", "i": "ⁱ", "x": "ˣ",
-  "y": "ʸ", "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ",
-  "f": "ᶠ", "g": "ᵍ", "h": "ʰ", "k": "ᵏ", "l": "ˡ", "m": "ᵐ",
-  "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ",
-  "v": "ᵛ", "w": "ʷ", "z": "ᶻ", "∞": "°°",
-};
-function toSuperscript(s: string): string {
-  // Map ∞ specially
-  if (s === "∞" || s === "infty") return "∞";
-  return s.split("").map(c => SUP_MAP[c] ?? SUP_MAP[c.toLowerCase()] ?? c).join("");
-}
-
-function latexToHuman(s: string): string {
-  if (s == null || typeof s !== "string") return String(s ?? "");
-  let r = s;
-  // Fix control chars from JSON-mangled LaTeX backslashes:
-  // \f (form-feed) → \frac, \t (tab) → \times/\theta, \b (BS) → \beta, etc.
-  r = r.replace(/\f/g, "\\f");         // form-feed  → \f
-  r = r.replace(/\t/g, "\\t");         // tab        → \t
-  r = r.replace(/\x08/g, "\\b");       // backspace  → \b  (\b in regex = word boundary)
-  r = r.replace(/\r/g, "\\r");         // CR         → \r
-  r = r.replace(/\n/g, "\\n");         // newline    → \n
-  // Handle fractions — multiple forms Gemini may send:
-  // \frac{num}{den}, \frac num{den}, \frac{num}den, \fracND (single chars)
-  for (let i = 0; i < 3; i++) {
-    // Full braces: \frac{...}{...}
-    r = r.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "($1)⁄($2)");
-    // Left braces only: \frac{...}D
-    r = r.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}\s*([a-zA-Z0-9])/g, "($1)⁄($2)");
-    // Right braces only: \fracN{...}
-    r = r.replace(/\\frac\s*([a-zA-Z0-9])\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "($1)⁄($2)");
-    // No braces: \fracND (two single chars)
-    r = r.replace(/\\frac\s*([a-zA-Z0-9])\s*([a-zA-Z0-9])/g, "($1)⁄($2)");
-  }
-  // Square root
-  r = r.replace(/\\sqrt\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "√($1)");
-  // Integrals
-  r = r.replace(/\\int_\{([^}]*)}\^\{([^}]*)}/g, "∫[$1→$2]");
-  r = r.replace(/\\int/g, "∫");
-  // Summation / product
-  r = r.replace(/\\sum_\{([^}]*)}\^\{([^}]*)}/g, "Σ[$1→$2]");
-  r = r.replace(/\\sum/g, "Σ");
-  r = r.replace(/\\prod/g, "Π");
-  // Limits
-  r = r.replace(/\\lim_\{([^}]*)}/g, "lim($1)");
-  r = r.replace(/\\lim/g, "lim");
-  // Infinity
-  r = r.replace(/\\infty/g, "∞");
-  // Greek letters
-  r = r.replace(/\\alpha/g, "α"); r = r.replace(/\\beta/g, "β");
-  r = r.replace(/\\gamma/g, "γ"); r = r.replace(/\\delta/g, "δ");
-  r = r.replace(/\\epsilon/g, "ε"); r = r.replace(/\\theta/g, "θ");
-  r = r.replace(/\\lambda/g, "λ"); r = r.replace(/\\mu/g, "μ");
-  r = r.replace(/\\pi/g, "π"); r = r.replace(/\\sigma/g, "σ");
-  r = r.replace(/\\phi/g, "φ"); r = r.replace(/\\omega/g, "ω");
-  r = r.replace(/\\Delta/g, "Δ"); r = r.replace(/\\Sigma/g, "Σ");
-  // Trig / log
-  r = r.replace(/\\sin/g, "sin"); r = r.replace(/\\cos/g, "cos");
-  r = r.replace(/\\tan/g, "tan"); r = r.replace(/\\sec/g, "sec");
-  r = r.replace(/\\csc/g, "csc"); r = r.replace(/\\cot/g, "cot");
-  r = r.replace(/\\arcsin/g, "arcsin"); r = r.replace(/\\arccos/g, "arccos");
-  r = r.replace(/\\arctan/g, "arctan");
-  r = r.replace(/\\log/g, "log");
-  r = r.replace(/\\ln/g, "ln"); r = r.replace(/\\exp/g, "exp");
-  r = r.replace(/\\max/g, "max"); r = r.replace(/\\min/g, "min");
-  r = r.replace(/\\det/g, "det"); r = r.replace(/\\gcd/g, "gcd");
-  r = r.replace(/\\bmod/g, "mod"); r = r.replace(/\\mod/g, "mod");
-  // Superscript: x^{2} → x² (common ones), else x^(n)
-  r = r.replace(/\^\{0}/g, "⁰"); r = r.replace(/\^\{1}/g, "¹");
-  r = r.replace(/\^\{2}/g, "²"); r = r.replace(/\^\{3}/g, "³");
-  r = r.replace(/\^\{4}/g, "⁴"); r = r.replace(/\^\{5}/g, "⁵");
-  r = r.replace(/\^\{6}/g, "⁶"); r = r.replace(/\^\{7}/g, "⁷");
-  r = r.replace(/\^\{8}/g, "⁸"); r = r.replace(/\^\{9}/g, "⁹");
-  // Compound superscripts like ^{n+1}, ^{2x}, ^{∞}
-  r = r.replace(/\^\{([^}]*)}/g, (_m, inner: string) => toSuperscript(inner));
-  // Bare caret: e^x → eˣ, x^2 → x², etc.
-  r = r.replace(/\^(\d)/g, (_m, d: string) => toSuperscript(d));
-  r = r.replace(/\^([a-zA-Z∞])/g, (_m, c: string) => toSuperscript(c));
-  r = r.replace(/\^([+\-])/g, (_m, c: string) => toSuperscript(c));
-  // Subscript: _{n} → _n
-  r = r.replace(/_\{([^}]*)}/g, "_$1");
-  // Operators
-  r = r.replace(/\\times/g, "×"); r = r.replace(/\\cdot/g, "·");
-  r = r.replace(/\\div/g, "÷"); r = r.replace(/\\pm/g, "±");
-  r = r.replace(/\\neq/g, "≠"); r = r.replace(/\\leq/g, "≤");
-  r = r.replace(/\\geq/g, "≥"); r = r.replace(/\\approx/g, "≈");
-  r = r.replace(/\\rightarrow/g, "→"); r = r.replace(/\\implies/g, "⟹");
-  r = r.replace(/\\Rightarrow/g, "⇒");
-  // Arrows
-  r = r.replace(/\\to/g, "→");
-  // Misc
-  r = r.replace(/\\partial/g, "∂"); r = r.replace(/\\nabla/g, "∇");
-  r = r.replace(/\\forall/g, "∀"); r = r.replace(/\\exists/g, "∃");
-  r = r.replace(/\\in/g, "∈"); r = r.replace(/\\notin/g, "∉");
-  r = r.replace(/\\subset/g, "⊂"); r = r.replace(/\\cup/g, "∪");
-  r = r.replace(/\\cap/g, "∩"); r = r.replace(/\\emptyset/g, "∅");
-  r = r.replace(/\\cdots/g, "…"); r = r.replace(/\\ldots/g, "…");
-  r = r.replace(/\\dots/g, "…"); r = r.replace(/\\vdots/g, "⋮");
-  // Boxed answers — just show the content
-  for (let i = 0; i < 2; i++) {
-    r = r.replace(/\\boxed\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, "[$1]");
-  }
-  r = r.replace(/\\overline\{([^{}]*)}/g, "$1̄");
-  r = r.replace(/\\underline\{([^{}]*)}/g, "$1");
-  r = r.replace(/\\hat\{([^{}]*)}/g, "$1̂");
-  r = r.replace(/\\vec\{([^{}]*)}/g, "$1→");
-  // Clean up remaining LaTeX formatting
-  r = r.replace(/\\,/g, " "); r = r.replace(/\\;/g, " ");
-  r = r.replace(/\\!/g, ""); r = r.replace(/\\quad/g, "  ");
-  r = r.replace(/\\qquad/g, "   ");
-  r = r.replace(/\\left/g, ""); r = r.replace(/\\right/g, "");
-  r = r.replace(/\\text\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathrm\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathbf\{([^}]*)}/g, "$1");
-  r = r.replace(/\\mathit\{([^}]*)}/g, "$1");
-  r = r.replace(/\\displaystyle/g, "");
-  // Last-chance frac cleanup: if \frac survived all patterns, strip it gracefully
-  r = r.replace(/\\frac\s*/g, "");
-  r = r.replace(/\\[a-zA-Z]+/g, ""); // catch-all: strip any remaining \commands
-  r = r.replace(/\{/g, ""); r = r.replace(/}/g, "");
-  // Replace programming asterisk with proper multiplication dot
-  r = r.replace(/(\d)\s*\*\s*(?=[\d(xyzXYZ])/g, "$1·");
-  r = r.replace(/\)\s*\*\s*(?=[\d(xyzXYZ])/g, ")·");
-  r = r.replace(/([a-zA-Z])\s*\*\s*(?=[\d(xyzXYZ])/g, "$1·");
-  // Collapse multiple spaces
-  r = r.replace(/  +/g, " ").trim();
-  return r;
 }
 
 interface WhiteboardProps {

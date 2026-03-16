@@ -221,7 +221,7 @@ async def websocket_session(ws: WebSocket):
         await _send({"type": "transcript", "payload": {"role": role, "text": text}})
         # Fire-and-forget TTS for tutor responses when TTS is enabled
         if role == "tutor" and tts_enabled and text.strip():
-            asyncio.create_task(_synthesize_and_send(text))
+            _track_task(asyncio.create_task(_synthesize_and_send(text)))
 
     async def on_status(status: dict):
         """Forward status updates to the client."""
@@ -237,7 +237,7 @@ async def websocket_session(ws: WebSocket):
     try:
         # Don't connect to Gemini here — it connects lazily on first user input.
         # This avoids the native audio model dropping idle connections (1011 error).
-        await ws.send_json({"type": "status", "payload": {"connected": True, "session_id": session_id}})
+        await _send({"type": "status", "payload": {"connected": True, "session_id": session_id}})
 
         limiter = RateLimiter(max_per_minute=30)
         client_ip = ws.client.host if ws.client else "unknown"
@@ -336,7 +336,7 @@ async def websocket_session(ws: WebSocket):
                 image_text = (payload.get("text", "") or "")[:2000]
                 if len(image_data) > 10_000_000:  # ~7.5 MB decoded
                     logger.warning("Image payload too large — skipping")
-                    await ws.send_json({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
+                    await _send({"type": "status", "payload": {"error": "Image too large (max 7 MB)"}})
                     continue
                 if image_data:
                     if not limiter.check() or not _global_limiter.check(client_ip):
@@ -374,9 +374,11 @@ async def websocket_session(ws: WebSocket):
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
         ws_open = False  # stop all background callbacks from writing to the dead socket
-        # Cancel any in-flight tasks
+        # Cancel any in-flight tasks and wait for them
         for task in pending_tasks:
             task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         await session.close()
         if session_id:
             try:
