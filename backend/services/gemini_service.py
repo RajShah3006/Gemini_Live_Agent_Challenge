@@ -708,6 +708,10 @@ class GeminiSession:
                         response={"status": "ok"},
                     )
                 )
+                # Buffer text content from tool calls for question detection
+                for val in params.values():
+                    if isinstance(val, str) and len(val) > 2:
+                        self._audio_transcript_buf.append(val)
             if function_responses:
                 await self._session.send_tool_response(
                     function_responses=function_responses
@@ -730,14 +734,21 @@ class GeminiSession:
 
             if hasattr(response.server_content, 'turn_complete') and response.server_content.turn_complete:
                 self._speaking = False
-                # Check if voice AI asked the student a question BEFORE signaling turn_complete
+                # In teacher mode, the prompt always ends with a question after each step.
+                # Voice model speaks the question (audio) — we may not have text to parse.
+                # Check tool-call text first; fall back to assuming a question in teacher mode.
                 is_asking = False
-                if self._mode == "teacher" and self._audio_transcript_buf:
-                    voice_text = " ".join(self._audio_transcript_buf)
-                    if _asks_student_question(voice_text):
-                        self._awaiting_student_answer = True
+                if self._mode == "teacher":
+                    if self._audio_transcript_buf:
+                        voice_text = " ".join(self._audio_transcript_buf)
+                        is_asking = _asks_student_question(voice_text)
+                    # Fallback: teacher mode prompt always asks a question per turn
+                    if not is_asking:
                         is_asking = True
-                        logger.info("[Voice] AI asked a question — next input is a continuation")
+                        logger.info("[Voice] Teacher mode turn complete — assuming question (prompt guarantees it)")
+                    if is_asking:
+                        self._awaiting_student_answer = True
+                        logger.info("[Voice] AI asked a question — awaiting student answer")
                 # Send everything in ONE atomic status message
                 status: dict = {"speaking": False, "turn_complete": True}
                 if is_asking:
