@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import config as cfg
 from services.gemini_service import GeminiSession
 from services.session_service import SessionService
+from services.tts_service import synthesize as tts_synthesize
 from services.whiteboard_service import WhiteboardService
 
 # ── Cloud Logging ──
@@ -175,6 +176,7 @@ async def websocket_session(ws: WebSocket):
     await ws.accept()
     session_id = None
     ws_open = True  # set to False as soon as the client socket closes
+    tts_enabled = False  # client toggles this via tts_toggle message
 
     # Try to create a Firestore session
     try:
@@ -205,9 +207,21 @@ async def websocket_session(ws: WebSocket):
             await whiteboard_svc.track_command(session_id, cmd)
         await _send({"type": "whiteboard", "payload": cmd})
 
+    async def _synthesize_and_send(text: str):
+        """Synthesize TTS audio and send to client."""
+        try:
+            audio_b64 = await tts_synthesize(text)
+            if audio_b64:
+                await _send({"type": "tts_audio", "payload": {"data": audio_b64}})
+        except Exception as e:
+            logger.warning(f"TTS synthesis failed: {e}")
+
     async def on_transcript(role: str, text: str):
-        """Forward transcript updates to the client."""
+        """Forward transcript updates to the client. Synthesize TTS for tutor text if enabled."""
         await _send({"type": "transcript", "payload": {"role": role, "text": text}})
+        # Fire-and-forget TTS for tutor responses when TTS is enabled
+        if role == "tutor" and tts_enabled and text.strip():
+            asyncio.create_task(_synthesize_and_send(text))
 
     async def on_status(status: dict):
         """Forward status updates to the client."""
@@ -340,6 +354,11 @@ async def websocket_session(ws: WebSocket):
             elif msg_type == "set_mode":
                 new_mode = payload.get("mode", "teacher")
                 await session.set_mode(new_mode)
+
+            elif msg_type == "tts_toggle":
+                nonlocal tts_enabled
+                tts_enabled = bool(payload.get("enabled", False))
+                logger.info(f"TTS {'enabled' if tts_enabled else 'disabled'}")
 
             elif msg_type == "control":
                 action = payload.get("action", "")

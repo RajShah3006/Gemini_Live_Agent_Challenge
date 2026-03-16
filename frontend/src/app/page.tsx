@@ -223,6 +223,8 @@ export default function Home() {
     toggleAutoMic,
     sendMode,
     awaitingAnswer,
+    ttsEnabled,
+    toggleTts,
   } = useSession();
 
   const [showHistory, setShowHistory] = useState(false);
@@ -526,6 +528,7 @@ export default function Home() {
             onFollowUp={followUp}
             scrollToLabel={scrollTarget}
             isThinking={isThinking}
+            awaitingAnswer={awaitingAnswer}
           />
         </div>
       </div>
@@ -558,6 +561,8 @@ export default function Home() {
           onTextInputChange={setComposerText}
           onModeChange={sendMode}
           awaitingAnswer={awaitingAnswer}
+          ttsEnabled={ttsEnabled}
+          onToggleTts={toggleTts}
         />
       </div>
 

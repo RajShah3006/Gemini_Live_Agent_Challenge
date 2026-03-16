@@ -6,7 +6,7 @@ export interface ClientMessage {
 }
 
 export interface ServerMessage {
-  type: "audio" | "whiteboard" | "transcript" | "status" | "error";
+  type: "audio" | "tts_audio" | "whiteboard" | "transcript" | "status" | "error";
   payload: Record<string, unknown>;
 }
 

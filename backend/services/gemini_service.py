@@ -140,7 +140,7 @@ RULES:
 12. Keep spoken explanation brief — under 15 seconds per step. Speak the question, then wait.
 
 GRAPHING: draw_graph() with JS Math syntax. width 300, height 220.
-HOMEWORK: Grade each problem. Use ✓ or show corrections.
+IMAGE: If student sends a photo, identify the math shown and help solve it step by step.
 Draw Step 1 ONLY, then ask your first question."""
 
 # System prompt for standard API (text/image — teacher mode: interactive)
@@ -171,7 +171,7 @@ RULES:
 12. Use symbolic notation on the board, not prose.
 
 GRAPHING: draw_graph() with JS Math syntax. width 300, height 220.
-HOMEWORK: Grade each problem. Use ✓ or show corrections.
+IMAGE: If student sends a photo, identify the math shown and help solve it step by step.
 FOLLOW-UPS: If user says "[Q1]" or "[Q2]", answer about that previous question.
 Draw Step 1 ONLY, then ask your first question."""
 
@@ -192,7 +192,7 @@ RULES:
 9. Use symbolic notation, not prose.
 
 GRAPHING: draw_graph() with JS Math syntax. width 300, height 220.
-HOMEWORK: Grade each problem. Use ✓ or show corrections.
+IMAGE: If student sends a photo, identify the math shown and solve it step by step.
 START DRAWING IMMEDIATELY. Be fast and direct."""
 
 QUICK_AUDIO_SYSTEM_INSTRUCTION = """You are MathBoard in QUICK mode. You have a whiteboard.
@@ -280,15 +280,12 @@ def _asks_student_question(text: str) -> bool:
 def _build_image_prompt(user_text: str | None) -> str:
     cleaned = (user_text or "").strip()
     base = (
-        "Use the uploaded photo as your main reference. First identify what is visible in the photo, "
-        "including the exact math problem and any student work or mistakes shown. Then explain the problem "
-        "using the photo as context and solve it step by step on the whiteboard."
+        "The student uploaded a photo. Identify the math problem(s) visible in the image, "
+        "then solve step by step on the whiteboard using the photo as context."
     )
     if cleaned:
-        return f"{base} Also answer the student's request: {cleaned}"
-    return (
-        f"{base} If the photo shows homework, grade each visible problem and explain any corrections."
-    )
+        return f"{base} The student also says: {cleaned}"
+    return base
 
 
 class GeminiSession:

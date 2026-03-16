@@ -32,6 +32,8 @@ interface VoicePanelProps {
   onToggleAutoMic: () => void;
   onInterrupt?: () => void;
   onModeChange?: (mode: "teacher" | "quick") => void;
+  ttsEnabled?: boolean;
+  onToggleTts?: () => void;
   awaitingAnswer?: boolean;
   questions?: QuestionInfo[];
   inputRef?: RefObject<HTMLTextAreaElement | null>;
@@ -53,6 +55,8 @@ export function VoicePanel({
   onToggleAutoMic,
   onInterrupt,
   onModeChange,
+  ttsEnabled = true,
+  onToggleTts,
   awaitingAnswer = false,
   questions = [],
   inputRef,
@@ -426,6 +430,20 @@ export function VoicePanel({
                 ⚡️ Quick
               </button>
             </div>
+
+          {/* TTS Toggle */}
+          <button
+            onClick={onToggleTts}
+            title={ttsEnabled ? "Mute AI voice" : "Enable AI voice"}
+            className="focus-ring text-[11px] font-medium px-2 py-1 rounded-md transition-colors hidden sm:block"
+            style={{
+              background: ttsEnabled ? "rgba(52,211,153,0.12)" : "transparent",
+              color: ttsEnabled ? "var(--success)" : "var(--text-muted)",
+              border: `1px solid ${ttsEnabled ? "rgba(52,211,153,0.25)" : "var(--border)"}`,
+            }}
+          >
+            {ttsEnabled ? "🔊" : "🔇"}
+          </button>
 
           {/* Math Keyboard Toggle */}
           <button

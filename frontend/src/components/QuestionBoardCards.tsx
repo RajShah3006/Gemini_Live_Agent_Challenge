@@ -18,6 +18,7 @@ interface QuestionBoardCardsProps {
   onFollowUp: (label: string) => void;
   scrollToLabel?: string | null;
   isThinking?: boolean;
+  awaitingAnswer?: boolean;
 }
 
 export function QuestionBoardCards({
@@ -27,6 +28,7 @@ export function QuestionBoardCards({
   onFollowUp,
   scrollToLabel,
   isThinking,
+  awaitingAnswer,
 }: QuestionBoardCardsProps) {
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -75,6 +77,7 @@ export function QuestionBoardCards({
       {cards.map((card, idx) => {
         const isActive = expandedQ === idx;
         const isLatest = idx === cards.length - 1;
+        const isPulsing = isLatest && !!awaitingAnswer;
 
         return (
           <div
@@ -82,11 +85,19 @@ export function QuestionBoardCards({
             ref={(el) => {
               cardRefs.current[card.label] = el;
             }}
-            className="rounded-2xl border p-5"
+            className={`rounded-2xl border p-5 transition-all duration-300${isPulsing ? " animate-pulse-border" : ""}`}
             style={{
               background: "rgba(15,20,40,0.55)",
-              borderColor: isActive ? "rgba(99,102,241,0.4)" : "rgba(148,163,184,0.08)",
-              boxShadow: isActive ? "0 12px 30px rgba(15,20,40,0.4)" : "none",
+              borderColor: isPulsing
+                ? "rgba(99,102,241,0.6)"
+                : isActive
+                  ? "rgba(99,102,241,0.4)"
+                  : "rgba(148,163,184,0.08)",
+              boxShadow: isPulsing
+                ? "0 0 20px rgba(99,102,241,0.2)"
+                : isActive
+                  ? "0 12px 30px rgba(15,20,40,0.4)"
+                  : "none",
             }}
           >
             <div className="flex items-center gap-2 mb-3">

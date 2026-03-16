@@ -74,6 +74,11 @@ export function useSession() {
   const [voiceCommand, setVoiceCommand] = useState<{ cmd: string; arg?: string } | null>(null);
   const [autoMicEnabled, setAutoMicEnabled] = useState(false);
 
+  // TTS toggle: when on, backend sends synthesized audio for text-mode responses
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const ttsEnabledRef = useRef(true);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const { playChunk, stop: stopAudio } = useAudioPlayer();
 
   const stopBrowserSpeech = useCallback(() => {
@@ -83,14 +88,36 @@ export function useSession() {
     if (activeUtteranceRef.current) {
       activeUtteranceRef.current = null;
     }
+    // Also stop any playing TTS audio
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
   }, []);
 
-  // Browser TTS for text-mode responses (standard API has no native audio)
+  // Play MP3 TTS audio from the backend (Google Cloud TTS)
+  const playTtsAudio = useCallback(
+    (base64Mp3: string) => {
+      if (!ttsEnabledRef.current) return;
+      // Don't play TTS if voice (Live API) is active — it has its own audio
+      if (micActiveRef.current) return;
+      // Stop any currently playing TTS
+      if (ttsAudioRef.current) {
+        ttsAudioRef.current.pause();
+      }
+      const audio = new Audio(`data:audio/mp3;base64,${base64Mp3}`);
+      ttsAudioRef.current = audio;
+      audio.play().catch(() => {});
+    },
+    [],
+  );
+
+  // Fallback browser TTS (used when Google Cloud TTS is unavailable)
   const speakText = useCallback(
     (text: string) => {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
-      // Don't speak if voice (Live API) is active — it has its own audio
       if (micActiveRef.current) return;
+      if (!ttsEnabledRef.current) return;
       window.speechSynthesis.cancel();
       const utt = new SpeechSynthesisUtterance(text);
       utt.rate = 1.05;
@@ -166,9 +193,8 @@ export function useSession() {
             const role = (msg.payload.role as "user" | "tutor") || "tutor";
             const text = msg.payload.text as string;
             addTranscript(role, text);
-            // Browser TTS for text-mode responses when auto-speak was requested
-            if (role === "tutor" && pendingAutoSpeakRef.current) {
-              speakText(text);
+            // TTS audio is handled via the separate "tts_audio" message from backend
+            if (role === "tutor") {
               pendingAutoSpeakRef.current = false;
             }
             break;
@@ -209,6 +235,11 @@ export function useSession() {
               playChunk(msg.payload.data as string);
             }
             break;
+          case "tts_audio":
+            if (msg.payload.data) {
+              playTtsAudio(msg.payload.data as string);
+            }
+            break;
           case "error":
             console.error("Server error:", msg.payload);
             setErrorMessage(typeof msg.payload === "string" ? msg.payload : "Something went wrong — please try again.");
@@ -219,7 +250,7 @@ export function useSession() {
         console.error("Failed to parse server message");
       }
     },
-    [addTranscript, playChunk, stopAudio, speakText],
+    [addTranscript, playChunk, playTtsAudio, stopAudio, speakText],
   );
 
   // Keep a stable ref to handleMessage so the WS onmessage callback always
@@ -256,6 +287,10 @@ export function useSession() {
         // Sync mode to backend on connect (in case user changed before connecting)
         if (currentModeRef.current !== "teacher") {
           ws.send(JSON.stringify({ type: "set_mode", payload: { mode: currentModeRef.current } }));
+        }
+        // Sync TTS state to backend
+        if (ttsEnabledRef.current) {
+          ws.send(JSON.stringify({ type: "tts_toggle", payload: { enabled: true } }));
         }
       };
       ws.onclose = () => {
@@ -447,6 +482,17 @@ export function useSession() {
     [send],
   );
 
+  const toggleTts = useCallback(() => {
+    const next = !ttsEnabledRef.current;
+    ttsEnabledRef.current = next;
+    setTtsEnabled(next);
+    send("tts_toggle", { enabled: next });
+    // Stop current TTS audio if disabling
+    if (!next) {
+      stopBrowserSpeech();
+    }
+  }, [send, stopBrowserSpeech]);
+
   return {
     isConnected,
     isListening,
@@ -470,5 +516,7 @@ export function useSession() {
     voiceCommand,
     sendMode,
     awaitingAnswer,
+    ttsEnabled,
+    toggleTts,
   };
 }

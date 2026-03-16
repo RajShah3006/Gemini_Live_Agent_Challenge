@@ -20,6 +20,7 @@ import {
   animatedLine,
   animateCmd,
   drawInstant,
+  CONTENT_SIZE as HELPERS_CONTENT_SIZE,
   type SetCursor,
 } from "./whiteboard-helpers";
 
@@ -31,7 +32,7 @@ const SHAPE_DURATION = 400;
 const BG = "#0b1120";
 const GRID = "rgba(255,255,255,0.025)";
 const FONT = "'Single Day', 'Segoe Script', cursive";
-const CONTENT_SIZE = 24;  // single font size for all board content
+const CONTENT_SIZE = HELPERS_CONTENT_SIZE; // use unified size from helpers
 // Clean marker palette — visible on dark bg, no neon
 const TEXT_COLOR = "#e2e8f0";      // white-ish for plain text
 const LINE_COLOR = "#94a3b8";      // soft gray for lines/dividers
@@ -1030,7 +1031,7 @@ function getCommandY(cmd: WhiteboardCommand): number {
     if (cmd.action === "draw_graph") return (p.y as number) + ((p.height as number) || 350);
     // Account for text height to prevent overlap
     if (cmd.action === "draw_text" || cmd.action === "draw_latex") {
-      return (p.y as number) + ((p.size as number) || 24) + 8;
+      return (p.y as number) + ((p.size as number) || CONTENT_SIZE) + 8;
     }
     if (cmd.action === "step_marker") {
       return (p.y as number) + 40;

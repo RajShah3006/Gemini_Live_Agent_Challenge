@@ -117,3 +117,12 @@ body {
   /* Bottom bar padding for notch devices */
   .bottom-bar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 }
+
+/* Pulsing border for awaiting-answer cards */
+@keyframes pulseBorder {
+  0%, 100% { border-color: rgba(99,102,241,0.3); box-shadow: 0 0 12px rgba(99,102,241,0.1); }
+  50% { border-color: rgba(99,102,241,0.7); box-shadow: 0 0 24px rgba(99,102,241,0.25); }
+}
+.animate-pulse-border {
+  animation: pulseBorder 2s ease-in-out infinite;
+}
